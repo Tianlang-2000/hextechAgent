@@ -1,0 +1,47 @@
+{
+  "name": "hextech-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "复用本机 Codex 的桌面巡检助手，以三张方案卡呈现代码与工作问题的下一步",
+  "homepage": "https://github.com/Tianlang-2000/hextechAgent",
+  "repository": { "type": "git", "url": "https://github.com/Tianlang-2000/hextechAgent.git" },
+  "bugs": { "url": "https://github.com/Tianlang-2000/hextechAgent/issues" },
+  "author": "Hextech Agent",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "test": "tsx --test tests/*.test.ts",
+    "check:codex": "tsx tests/connection-check.ts",
+    "test:desktop": "npm run build && electron . --smoke-test",
+    "start": "electron .",
+    "preview": "vite --host 127.0.0.1",
+    "package:dir": "npm run build && electron-builder --win dir",
+    "package": "npm run build && electron-builder --win portable"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3",
+    "@lucide/vue": "^1.59.0",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3",
+    "tsx": "^4.19.2",
+    "typescript": "~5.7.2",
+    "vite": "^8.3.4",
+    "vite-plugin-electron": "^1.1.2",
+    "vue-tsc": "^2.2.0"
+  },
+  "build": {
+    "appId": "com.hextech.agent",
+    "productName": "Hextech Agent",
+    "files": ["dist/**/*", "dist-electron/**/*", "package.json"],
+    "electronDist": "node_modules/electron/dist",
+    "win": { "target": "portable", "signAndEditExecutable": false },
+    "directories": { "output": "release" }
+  }
+}

@@ -7,13 +7,23 @@ import os from 'node:os'
 type Pending = { resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
 export async function findCodex(): Promise<string> {
   const name = process.platform === 'win32' ? 'codex.exe' : 'codex'
-  const candidates = (process.env.PATH ?? '').split(path.delimiter).map(dir => path.join(dir, name))
+  const triple = process.arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc'
+  const resources = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+  const candidates: string[] = []
+  if (resources) candidates.push(path.join(resources, 'codex', 'vendor', triple, 'bin', name), path.join(resources, 'codex', 'vendor', triple, 'codex', name))
+  candidates.push(path.resolve('build/codex-runtime/vendor', triple, 'bin', name))
+  candidates.push(path.resolve(`node_modules/@openai/codex-${process.platform}-${process.arch}/vendor`, triple, 'bin', name))
+  candidates.push(path.resolve('build/codex-runtime/vendor', triple, 'codex', name))
+  candidates.push(...(process.env.PATH ?? '').split(path.delimiter).map(dir => path.join(dir, name)))
   if (process.platform === 'win32') {
     const triple = process.arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc'
     const platformPackage = `codex-win32-${process.arch}`
     const prefixes = [...(process.env.PATH ?? '').split(path.delimiter), path.join(process.env.APPDATA || '', 'npm')]
     for (const prefix of prefixes) {
       const base = path.join(prefix,'node_modules','@openai','codex')
+      candidates.push(path.join(base,'vendor',triple,'bin',name))
+      candidates.push(path.join(base,'node_modules','@openai',platformPackage,'vendor',triple,'bin',name))
+      candidates.push(path.join(prefix,'node_modules','@openai',platformPackage,'vendor',triple,'bin',name))
       candidates.push(path.join(base,'vendor',triple,'codex',name))
       candidates.push(path.join(base,'node_modules','@openai',platformPackage,'vendor',triple,'codex',name))
       candidates.push(path.join(prefix,'node_modules','@openai',platformPackage,'vendor',triple,'codex',name))
@@ -28,7 +38,7 @@ export async function findCodex(): Promise<string> {
     } catch { /* CLI can also be installed on PATH. */ }
   }
   for (const file of candidates) { try { await access(file); return file } catch { /* Try next installation. */ } }
-  throw new Error('未找到 Codex。请安装 Codex CLI 并执行 codex login，或在设置中填写 codex.exe 的完整路径。')
+  throw new Error('连接组件缺失。请重新安装海克斯 Agent；开发环境请先准备运行组件。')
 }
 
 export class CodexClient {
@@ -38,8 +48,9 @@ export class CodexClient {
   private active: { thread: string; resolve: (value: string) => void; reject: (error: Error) => void; text: string; timer: ReturnType<typeof setTimeout> } | null = null
   onQuota: (value: any) => void = () => {}
   onProgress: (value: string) => void = () => {}
+  onLogin: (value: { loginId: string | null; success: boolean; error?: string | null }) => void = () => {}
 
-  async connect(executable = '') {
+  async connect(executable = '', options: { allowSignedOut?: boolean } = {}) {
     this.close()
     const child = spawn(executable || await findCodex(), ['app-server', '--listen', 'stdio://'], { stdio: 'pipe', windowsHide: true })
     this.child = child
@@ -48,18 +59,19 @@ export class CodexClient {
     })
     let diagnostic = ''
     child.stderr.on('data', chunk => { diagnostic = (diagnostic + chunk.toString()).slice(-2000) })
-    child.on('error', error => this.fail(error))
+    child.on('error', error => { if (this.child === child) this.fail(error) })
+    child.stdin.on('error', error => { if (this.child === child) this.fail(error) })
     child.on('exit', () => {
       if (this.child !== child) return
       this.child = null
       this.fail(new Error(`Codex 连接已退出。${diagnostic.slice(-600)}`))
     })
-    await this.request('initialize', { clientInfo: { name: 'hextech_agent', title: 'Hextech Agent', version: '0.1.0' } })
+    await this.request('initialize', { clientInfo: { name: 'hextech_agent', title: 'Hextech Agent', version: '0.2.0' } })
     this.send({ method: 'initialized', params: {} })
     const account = await this.request('account/read', {})
-    if (!account.account || !['chatgpt', 'chatgptAuthTokens'].includes(account.account.type)) {
+    if (!options.allowSignedOut && (!account.account || !['chatgpt', 'chatgptAuthTokens'].includes(account.account.type))) {
       this.close()
-      throw new Error('需要通过 ChatGPT 登录的 Codex 账号。请在终端运行 codex login 后重新连接。')
+      throw new Error('请先在「连接与设置」中点击「登录 ChatGPT」，完成浏览器授权后再开始。')
     }
     return account.account
   }
@@ -92,6 +104,7 @@ export class CodexClient {
       return
     }
     const p = message.params || {}
+    if (message.method === 'account/login/completed') this.onLogin(p)
     if (message.method === 'account/rateLimits/updated') this.onQuota(p)
     if (!this.active || p.threadId !== this.active.thread) return
     if (message.method === 'item/agentMessage/delta') this.onProgress('Codex 正在整理结果…')

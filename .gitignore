@@ -21,3 +21,4 @@ test-workspace-*/
 *.pfx
 Thumbs.db
 .DS_Store
+build/codex-runtime/

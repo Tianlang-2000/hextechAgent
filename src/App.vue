@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Activity, ArrowDownToLine, ArrowRight, Check, ChevronRight, CircleHelp, Code2, Cpu, FileText, Folder, Hexagon, Layers3, LoaderCircle, Minus, Monitor, Pause, Play, Radar, Settings2, ShieldCheck, Sparkles, WandSparkles, X, Zap } from '@lucide/vue'
-import type { AgentState } from './shared'
+import type { AgentState, ConnectionState } from './shared'
 const overlay = location.hash === '#overlay'
 document.documentElement.classList.toggle('is-overlay',overlay)
 const state = ref<AgentState>({ status:'idle', settings:{ mode:'demo',root:'',executable:'',model:'',allowWrite:false,floating:true },account:'',quotaRemaining:null,files:0,rounds:0,solved:0,queued:0,currentFile:'',finding:null,backlog:[],report:'',reportPath:'',logs:[],error:'' })
@@ -12,6 +12,9 @@ const tab = ref('overview')
 const pending = ref(false)
 const executable = ref('')
 const model = ref('')
+const welcomeOpen = ref(false)
+const connection = ref<ConnectionState>({ status: 'unchecked', message: '登录后即可开始真实分析', email: '' })
+const connecting = computed(() => ['checking','login'].includes(connection.value.status))
 const running = computed(()=>!['idle','stopped','quota','error'].includes(state.value.status))
 const statusText = computed(()=>({idle:'等待启动',watching:'正在巡检',thinking:'正在思考',choosing:'等待你的选择',executing:'正在处理方案',followup:'本轮处理完成',stopped:'巡检已停止',quota:'额度已用完',error:'需要处理连接'}[state.value.status]))
 const statusDetail = computed(()=> state.value.currentFile || (running.value ? '持续留意桌面的每一次变化' : '准备好后，让灵感开始流动'))
@@ -21,29 +24,49 @@ const canChoose = computed(()=>state.value.status==='choosing')
 const isFollowup = computed(()=>state.value.status==='followup')
 const quotaText = computed(()=>state.value.settings.mode==='demo' ? '不消耗额度' : state.value.quotaRemaining===null ? '额度暂不可用' : `${Math.round(state.value.quotaRemaining)}% 剩余`)
 let unsubscribe: (()=>void)|undefined
+let unsubscribeConnection: (()=>void)|undefined
 let toastTimer: ReturnType<typeof setTimeout>
 function notify(text: string) { toast.value=text; clearTimeout(toastTimer); toastTimer=setTimeout(()=>toast.value='',4500) }
 async function action(name:string,payload?:unknown) {
-  if (!window.hextech) { notify('请通过 Electron 启动，浏览器预览不连接本机文件'); return }
-  try { await window.hextech.action(name,payload) } catch(error) { notify(String((error as Error).message)) }
+  if (!window.hextech) { notify('请打开海克斯 Agent 应用后操作'); return false }
+  try { await window.hextech.action(name,payload); return true } catch(error) { notify(String((error as Error).message)); return false }
 }
 async function toggleRun() { pending.value=true; try { await action(running.value ? 'stop':'start') } finally { pending.value=false } }
 async function selectRoot() { if (!window.hextech) return; const root=await window.hextech.chooseRoot(); if(root) await action('settings',{root}) }
-async function saveSettings() { await action('settings',{executable:executable.value,model:model.value}); settingsOpen.value=false }
+async function saveSettings() { if (await action('settings',{executable:executable.value,model:model.value})) settingsOpen.value=false }
+async function selectMode(mode: 'demo' | 'codex') {
+  if (await action('settings',{mode})) {
+    if (mode==='codex') await action('connection-check')
+    else if (connection.value.status==='login') await action('cancel-login')
+  }
+}
+async function startDemo() {
+  pending.value=true
+  try { if (await action('settings',{mode:'demo',onboardingDone:true})) { welcomeOpen.value=false; await action('start') } }
+  finally { pending.value=false }
+}
+async function connectFromWelcome() { welcomeOpen.value=false; settingsOpen.value=true; await selectMode('codex') }
+async function startConnected() {
+  if (connection.value.status!=='ready') return
+  if (await action('settings',{onboardingDone:true,executable:executable.value,model:model.value})) { settingsOpen.value=false; await action('start') }
+}
 onMounted(async()=>{
   if (window.hextech) {
     unsubscribe=window.hextech.onState(value=>{state.value=value})
     state.value=await window.hextech.getState()
     executable.value=state.value.settings.executable; model.value=state.value.settings.model
+    welcomeOpen.value=!overlay && !state.value.settings.onboardingDone
+    unsubscribeConnection=window.hextech.onConnection(value=>{connection.value=value})
+    connection.value=await window.hextech.getConnection()
   }
 })
-onUnmounted(()=>{unsubscribe?.();clearTimeout(toastTimer)})
+onUnmounted(()=>{unsubscribe?.();unsubscribeConnection?.();clearTimeout(toastTimer)})
 </script>
 
 <template>
   <div :class="['app-shell',{floating:overlay}]">
     <header class="titlebar">
-      <div class="brand"><span class="brand-mark"><Hexagon :size="23"/><span>H</span></span><strong>HEXTECH <em>AGENT</em></strong><span class="version">DEMO 0.1</span></div>
+      <div class="brand"><span class="brand-mark"><Hexagon :size="23"/><span>H</span></span><strong>HEXTECH <em>AGENT</em></strong><span class="version">0.2</span></div>
       <div class="title-center"><span class="tiny-dot"/> {{ state.settings.mode==='demo' ? '演示空间' : 'CODEX · 本机连接' }}</div>
       <div class="window-actions"><button v-if="overlay" title="收起卡牌，巡检继续" @click="action('hide-overlay')"><Minus :size="17"/></button><button v-else title="最小化" @click="action('minimize')"><Minus :size="17"/></button><button class="close-window" title="关闭并停止所有任务" @click="action('close')"><X :size="18"/></button></div>
     </header>
@@ -100,7 +123,10 @@ onUnmounted(()=>{unsubscribe?.();clearTimeout(toastTimer)})
       </main>
     </div>
 
-    <div v-if="settingsOpen" class="modal-backdrop" @click.self="settingsOpen=false"><section class="modal"><div class="modal-heading"><h2>连接与设置</h2><button class="icon-button" @click="settingsOpen=false"><X :size="19"/></button></div><p class="modal-intro">海克斯负责发现与呈现，Codex 负责思考与执行。</p><label>运行模式</label><div class="mode-selector"><button :class="{selected:state.settings.mode==='demo'}" :disabled="running" @click="action('settings',{mode:'demo'})"><Sparkles :size="17"/><strong>演示模式</strong><small>样例方案 · 无需登录</small></button><button :class="{selected:state.settings.mode==='codex'}" :disabled="running" @click="action('settings',{mode:'codex'})"><Cpu :size="17"/><strong>本机 Codex</strong><small>真实分析 · 使用账号额度</small></button></div><p class="setting-note">{{ state.settings.mode==='codex'?'请先安装 Codex CLI，并在终端执行 codex login。切换后默认监听系统桌面。':'演示使用独立样例目录；也可以更换目录观察新文件优先流程。' }}</p><label>Codex 程序路径 <span>留空自动查找</span></label><input v-model="executable" :disabled="running" placeholder="例如 C:\…\codex.exe"/><label>模型 <span>留空使用本机 Codex 配置</span></label><input v-model="model" :disabled="running" placeholder="使用账号可用的模型名称"/><div class="setting-toggle"><div><strong>桌面悬浮卡牌</strong><small>方案就绪后，在桌面弹出独立窗口</small></div><button :disabled="running" :class="['toggle',{on:state.settings.floating}]" @click="action('settings',{floating:!state.settings.floating})"><i/></button></div><div class="setting-toggle"><div><strong>选牌后允许修改文件</strong><small>默认关闭；开启后 Codex 可在监听目录内执行方案</small></div><button :disabled="running" :class="['toggle',{on:state.settings.allowWrite}]" @click="action('settings',{allowWrite:!state.settings.allowWrite})"><i/></button></div><p v-if="running" class="setting-note">先停止巡检，即可修改设置。</p><div class="modal-actions"><button class="secondary-button" @click="settingsOpen=false">关闭</button><button class="run-button" :disabled="running" @click="saveSettings"><Check :size="15"/>保存设置</button></div></section></div>
+    <div v-if="welcomeOpen" class="modal-backdrop"><section class="modal welcome-modal"><div class="welcome-brand"><Hexagon :size="58" :stroke-width="1"/><Sparkles :size="23"/></div><div class="eyebrow">WELCOME TO HEXTECH</div><h2>准备好了，轻松开始。</h2><p class="modal-intro">不用设置复杂参数。先看看海克斯怎样发现问题，<br/>再用三张牌帮你决定下一步。</p><div class="welcome-steps"><span><Check :size="14"/> 安装已经完成</span><span><ShieldCheck :size="14"/> 默认只读，不改你的文件</span><span><Monitor :size="14"/> 下次双击桌面图标即可打开</span></div><button class="run-button welcome-primary" data-testid="welcome-demo" :disabled="pending" @click="startDemo"><Play :size="16"/>先体验一下 <span>无需登录 · 不消耗额度</span></button><button class="welcome-connect" :disabled="pending" @click="connectFromWelcome">连接我的 ChatGPT，开始真实分析 <ArrowRight :size="15"/></button><p class="welcome-note">真实分析需要登录有 Codex 使用权限的账号。</p></section></div>
+    <div v-if="settingsOpen" class="modal-backdrop" @click.self="settingsOpen=false"><section class="modal"><div class="modal-heading"><h2>连接与设置</h2><button class="icon-button" @click="settingsOpen=false"><X :size="19"/></button></div><p class="modal-intro">先体验，或连接账号后分析自己的文件。</p><label>运行模式</label><div class="mode-selector"><button :class="{selected:state.settings.mode==='demo'}" :disabled="running||connecting" @click="selectMode('demo')"><Sparkles :size="17"/><strong>演示模式</strong><small>样例方案 · 无需登录</small></button><button :class="{selected:state.settings.mode==='codex'}" :disabled="running||connecting" @click="selectMode('codex')"><Cpu :size="17"/><strong>真实分析</strong><small>连接 ChatGPT 账号</small></button></div>
+    <div v-if="state.settings.mode==='codex'" :class="['connection-panel',connection.status]" aria-live="polite"><div class="connection-heading"><LoaderCircle v-if="connecting" class="spin" :size="18"/><Check v-else-if="connection.status==='ready'" :size="18"/><Cpu v-else :size="18"/><strong>{{ connection.status==='ready'?(connection.email||'账号已连接'):'ChatGPT 账号连接' }}</strong></div><p>{{ connection.message }}</p><div class="connection-actions"><button v-if="connection.status!=='ready'&&connection.status!=='login'" class="run-button" :disabled="connecting||running" @click="action('login')">登录 ChatGPT <ArrowRight :size="14"/></button><button v-if="connection.status==='login'" class="secondary-button" @click="action('cancel-login')">取消登录</button><button class="connection-retry" :disabled="connecting||running" @click="action('connection-check')">重新检查</button></div><small>连接组件已随安装包提供。登录在浏览器中完成，无需命令行。</small></div>
+    <p class="setting-note">{{ state.settings.mode==='codex'?'真实分析会将所选目录的文件节选交给模型处理，并使用账号额度。':'演示使用独立样例目录，不需要登录，不消耗账号额度。' }}</p><details class="advanced-settings"><summary>高级选项 <span>通常无需修改</span></summary><label>连接组件路径 <span>留空使用内置组件</span></label><input v-model="executable" :disabled="running||connecting" placeholder="自动使用内置组件"/><label>模型 <span>留空使用默认配置</span></label><input v-model="model" :disabled="running||connecting" placeholder="使用账号可用的模型名称"/></details><div class="setting-toggle"><div><strong>桌面悬浮卡牌</strong><small>方案就绪后，在桌面弹出独立窗口</small></div><button :disabled="running" :class="['toggle',{on:state.settings.floating}]" @click="action('settings',{floating:!state.settings.floating})"><i/></button></div><div class="setting-toggle"><div><strong>选牌后允许修改文件</strong><small>默认关闭；开启后，选牌才会触发文件修改</small></div><button :disabled="running" :class="['toggle',{on:state.settings.allowWrite}]" @click="action('settings',{allowWrite:!state.settings.allowWrite})"><i/></button></div><p v-if="running" class="setting-note">先停止巡检，即可修改设置。</p><div class="modal-actions"><button class="secondary-button" @click="settingsOpen=false">关闭</button><button v-if="state.settings.mode==='codex'&&connection.status==='ready'" class="run-button" :disabled="running" @click="startConnected"><Play :size="15"/>开始真实巡检</button><button v-else class="run-button" :disabled="running||connecting" @click="saveSettings"><Check :size="15"/>保存设置</button></div></section></div>
     <div v-if="reportOpen" class="modal-backdrop" @click.self="reportOpen=false"><section class="modal report-modal"><div class="modal-heading"><h2>执行报告</h2><button class="icon-button" @click="reportOpen=false"><X :size="19"/></button></div><pre>{{ state.report }}</pre><div class="modal-actions"><button class="run-button" @click="action('report')"><ArrowDownToLine :size="16"/>打开报告文件</button></div></section></div>
     <div v-if="toast" class="toast"><CircleHelp :size="16"/>{{ toast }}</div>
   </div>

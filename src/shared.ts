@@ -2,7 +2,8 @@ export type Status = 'idle' | 'watching' | 'thinking' | 'choosing' | 'executing'
 export interface Plan { id: string; title: string; subtitle: string; description: string; steps: string[]; effort: string; risk: string }
 export interface Finding { id: string; title: string; summary: string; evidence: string[]; category: string; plans: Plan[]; source: string }
 export interface Analysis { hasIssue: boolean; title: string; summary: string; evidence: string[]; category: string; plans: Plan[] }
-export interface Settings { mode: 'demo' | 'codex'; root: string; executable: string; model: string; allowWrite: boolean; floating: boolean }
+export interface Settings { mode: 'demo' | 'codex'; root: string; executable: string; model: string; allowWrite: boolean; floating: boolean; onboardingDone?: boolean }
+export interface ConnectionState { status: 'unchecked' | 'checking' | 'ready' | 'signed-out' | 'login' | 'error'; message: string; email: string }
 export interface Log { id: number; time: string; text: string; kind: 'info' | 'new' | 'success' | 'error' }
 export interface AgentState {
   status: Status; settings: Settings; account: string; quotaRemaining: number | null;
@@ -10,6 +11,8 @@ export interface AgentState {
   finding: Finding | null; backlog: Finding[]; report: string; reportPath: string; logs: Log[]; error: string;
 }
 export interface HextechAPI {
+  getConnection(): Promise<ConnectionState>;
+  onConnection(callback: (state: ConnectionState) => void): () => void;
   getState(): Promise<AgentState>;
   onState(callback: (state: AgentState) => void): () => void;
   action(action: string, payload?: unknown): Promise<void>;

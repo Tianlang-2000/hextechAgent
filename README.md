@@ -4,7 +4,7 @@
 
 海克斯 Agent 是一个使用 Electron、Vite、TypeScript 和 Vue 3 开发的 Windows 桌面 Demo。它持续监听指定目录，把文件变化交给本机 Codex 分析；发现有依据的问题后，以三张方案卡呈现结果。用户选牌后，再决定继续深入，还是寻找下一个问题。
 
-本项目复用 Codex 的模型、工具和本机登录，不需要自行开发 Agent，也不要求填写 OpenAI API Key。默认提供不调用模型的演示模式，可以先体验完整交互。
+安装包自带 Electron 运行环境和官方 Codex 连接组件，不需要 Node.js、命令行或额外安装 Codex。可以直接体验，也可以在软件里点击「登录 ChatGPT」，通过浏览器连接账号后开始真实分析。
 
 ![海克斯 Agent 桌面悬浮卡牌](docs/images/desktop-cards.png)
 
@@ -46,9 +46,13 @@ Codex 判断是否涉及新任务或实际问题
 
 ### 使用 Windows 应用
 
-从 [Releases](https://github.com/Tianlang-2000/hextechAgent/releases) 下载 Windows x64 压缩包，完整解压后运行 `Hextech Agent.exe`。运行时需要同目录的资源文件，请保留整个解压目录。
+从 [Releases](https://github.com/Tianlang-2000/hextechAgent/releases) 下载 `Hextech-Agent-Setup-0.2.0-x64.exe`，双击后按中文安装向导完成安装。默认创建「海克斯 Agent」桌面图标和开始菜单入口；以后双击图标即可打开，也可从 Windows 设置中卸载。
 
-启动后点击「开始巡检」即可体验演示流程。打开左侧演示文件夹，添加 Markdown、文本或代码文件，可以观察新动作优先。
+首次打开会显示欢迎引导，点击「先体验一下」即可开始，不需要登录，也不消耗额度。打开左侧演示文件夹，添加 Markdown、文本或代码文件，可以观察新动作优先。
+
+![首次使用引导](docs/images/welcome.png)
+
+安装包当前未进行 Windows 代码签名，系统可能显示发布者未验证提示；请核对下载来源和发布页提供的 SHA256 校验值。
 
 ### 从源码启动
 
@@ -70,11 +74,11 @@ npm start
 
 ## 使用真实 Codex
 
-1. 安装 Codex CLI，并执行 `codex login`，使用 ChatGPT 账号登录。
-2. 打开「连接与设置」，将运行模式切换为「本机 Codex」。
-3. 默认监听位置会切换为系统桌面；也可以先选择一个专门的测试目录。
-4. 程序路径和模型均可留空，分别使用自动查找结果和本机 Codex 配置。
-5. 点击「开始巡检」。真实分析会使用账号的 Codex 额度。
+1. 在欢迎页选择「连接我的 ChatGPT」，或打开「连接与设置」选择「真实分析」。
+2. 点击「登录 ChatGPT」，在自动打开的浏览器中完成授权；已有可复用登录时会直接显示就绪。
+3. 返回软件，选择要检查的目录，点击「开始真实巡检」。真实分析需要账号有 Codex 使用权限，会使用账号额度。
+
+通常无需设置程序路径或模型；这些选项已收进「高级选项」。
 
 这里会启动独立的本机 Codex App Server 进程，复用本机登录。已有桌面聊天窗口和历史对话不会作为连接入口。接入实现与版本兼容说明见 [Codex 接入](docs/codex-integration.md)。
 
@@ -116,9 +120,10 @@ npm run test:desktop             # Electron 完整演示流程，输出截图
 npm run check:codex              # 检查登录、连接与额度，不发起模型任务
 npm run check:codex -- --analyze  # 对固定示例发起一次真实分析，消耗额度
 npm run package:dir              # 生成 Windows 解压即用目录
-npm run package                  # 生成 Windows portable 可执行文件
+npm run package                  # 生成 Windows 中文安装包与桌面快捷方式
+npm run test:installer           # 安装、快捷方式、安装版启动与卸载测试
 ```
 
 ## 项目状态
 
-当前版本为 `0.1.0`，用于验证「持续发现 → 三张方案牌 → 处理 → 两张后续牌」的桌面交互。后续方向包括更多文档格式、任务持久化、处理结果复核，以及更完整的连接恢复机制；这些能力尚未包含在当前版本中。
+当前版本为 `0.2.0`，提供中文安装向导、桌面图标、首次使用引导和浏览器登录，用于验证「持续发现 → 三张方案牌 → 处理 → 两张后续牌」的桌面交互。后续方向包括更多文档格式、任务持久化、处理结果复核，以及更完整的连接恢复机制；这些能力尚未包含在当前版本中。

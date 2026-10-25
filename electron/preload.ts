@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AgentState, HextechAPI } from '../src/shared'
+import type { AgentState, ConnectionState, HextechAPI } from '../src/shared'
 const api: HextechAPI = {
+  getConnection: () => ipcRenderer.invoke('hextech:connection'),
+  onConnection: callback => {
+    const listener = (_event: unknown,state: ConnectionState) => callback(state)
+    ipcRenderer.on('hextech:connection',listener)
+    return () => ipcRenderer.removeListener('hextech:connection',listener)
+  },
   getState: () => ipcRenderer.invoke('hextech:state'),
   onState: callback => {
     const listener = (_event: unknown,state: AgentState) => callback(state)

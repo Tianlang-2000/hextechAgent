@@ -1,11 +1,16 @@
 {
   "name": "hextech-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "复用本机 Codex 的桌面巡检助手，以三张方案卡呈现代码与工作问题的下一步",
   "homepage": "https://github.com/Tianlang-2000/hextechAgent",
-  "repository": { "type": "git", "url": "https://github.com/Tianlang-2000/hextechAgent.git" },
-  "bugs": { "url": "https://github.com/Tianlang-2000/hextechAgent/issues" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Tianlang-2000/hextechAgent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Tianlang-2000/hextechAgent/issues"
+  },
   "author": "Hextech Agent",
   "type": "module",
   "main": "dist-electron/main.js",
@@ -17,18 +22,22 @@
     "test:desktop": "npm run build && electron . --smoke-test",
     "start": "electron .",
     "preview": "vite --host 127.0.0.1",
-    "package:dir": "npm run build && electron-builder --win dir",
-    "package": "npm run build && electron-builder --win portable"
+    "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "package:dir": "npm run build && npm run prepare:runtime && electron-builder --win dir --x64",
+    "package": "npm run build && npm run prepare:runtime && electron-builder --win nsis --x64",
+    "package:portable": "npm run build && npm run prepare:runtime && electron-builder --win portable --x64",
+    "test:installer": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-installer.ps1"
   },
   "dependencies": {
-    "chokidar": "^4.0.3",
     "@lucide/vue": "^1.59.0",
+    "chokidar": "^4.0.3",
     "vue": "^3.5.13"
   },
   "devDependencies": {
+    "@openai/codex": "0.164.0",
     "@types/node": "^22.10.0",
     "@vitejs/plugin-vue": "^6.0.10",
-    "electron": "^44.9.0",
+    "electron": "^44.9.1",
     "electron-builder": "^26.15.3",
     "tsx": "^4.19.2",
     "typescript": "~5.7.2",
@@ -36,12 +45,59 @@
     "vite-plugin-electron": "^1.1.2",
     "vue-tsc": "^2.2.0"
   },
+  "overrides": { "fast-uri": "^3.1.9" },
   "build": {
     "appId": "com.hextech.agent",
     "productName": "Hextech Agent",
-    "files": ["dist/**/*", "dist-electron/**/*", "package.json"],
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
     "electronDist": "node_modules/electron/dist",
-    "win": { "target": "portable", "signAndEditExecutable": false },
-    "directories": { "output": "release" }
+    "extraResources": [
+      {
+        "from": "build/codex-runtime",
+        "to": "codex"
+      },
+      {
+        "from": "build/icon.png",
+        "to": "brand/icon.png"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "signExecutable": false,
+      "artifactName": "Hextech-Agent-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "海克斯 Agent",
+      "uninstallDisplayName": "海克斯 Agent",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerLanguages": [
+        "zh_CN"
+      ],
+      "language": "2052",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "directories": {
+      "output": "release"
+    }
   }
 }

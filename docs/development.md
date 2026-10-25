@@ -58,7 +58,7 @@ npm run package
 完成后，应用入口为：
 
 ```text
-release/Hextech-Agent-Setup-0.2.0-x64.exe
+release/Hextech-Agent-Setup-0.2.1-x64.exe
 ```
 
 安装包包含 Electron 运行时、应用资源和锁定版本的官方 Codex Windows 组件。构建脚本从 npm 平台包提取组件，并附上仓库中的对应版本 LICENSE/NOTICE，不会复制开发者的本机登录、配置或报告。
@@ -66,7 +66,7 @@ release/Hextech-Agent-Setup-0.2.0-x64.exe
 需要目录版时仍可执行 `npm run package:dir`，但普通用户应下载安装程序。校验安装程序：
 
 ```powershell
-Get-FileHash -LiteralPath 'release/Hextech-Agent-Setup-0.2.0-x64.exe' -Algorithm SHA256
+Get-FileHash -LiteralPath 'release/Hextech-Agent-Setup-0.2.1-x64.exe' -Algorithm SHA256
 ```
 
 当前配置保留图标及版本资源编辑，关闭代码签名；安装程序未签名。没有内置自动更新服务。
@@ -78,7 +78,7 @@ Get-FileHash -LiteralPath 'release/Hextech-Agent-Setup-0.2.0-x64.exe' -Algorithm
 - 仓库保存源码、中文文档、文档截图和依赖锁文件。
 - 编译产物、依赖目录、缓存、测试数据和本机报告不提交到源码分支。
 - Windows 安装包通过 GitHub Release 附件提供，并同时提供 SHA256 校验值。
-- 当前为 `0.2.0` 安装版预发布，发布说明需要区分已实现能力和后续计划。
+- 当前为 `0.2.1` 安装版预发布，发布说明需要区分已实现能力和后续计划。
 - 默认 CI 只运行不消耗模型额度的测试与构建。
 
 ## Electron 下载失败

@@ -1,6 +1,6 @@
 {
   "name": "hextech-agent",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "复用本机 Codex 的桌面巡检助手，以三张方案卡呈现代码与工作问题的下一步",
   "homepage": "https://github.com/Tianlang-2000/hextechAgent",

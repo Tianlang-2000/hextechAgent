@@ -21,10 +21,17 @@ try {
   $taskInstalled = $true
   $taskExe = Join-Path $taskInstall 'Hextech Agent.exe'
   if (-not (Test-Path -LiteralPath $taskExe)) { throw 'Installed app missing' }
+  $taskLinkIndex = 0
   foreach ($taskLink in @($taskDesktop, $taskStartMenu)) {
     if (-not (Test-Path -LiteralPath $taskLink)) { throw "Shortcut missing: $taskLink" }
-    $taskTarget = (New-Object -ComObject WScript.Shell).CreateShortcut($taskLink).TargetPath
+    # WSH cannot reliably open non-ANSI filenames on English Windows. Read an
+    # exact byte copy under an ASCII filename; still verify the original link.
+    $taskProbe = Join-Path $taskResults "shortcut-check-$taskLinkIndex.lnk"
+    Copy-Item -LiteralPath $taskLink -Destination $taskProbe -Force
+    $taskTarget = (New-Object -ComObject WScript.Shell).CreateShortcut($taskProbe).TargetPath
+    if ([string]::IsNullOrWhiteSpace($taskTarget)) { throw 'Shortcut target could not be read' }
     if ([System.IO.Path]::GetFullPath($taskTarget) -ne $taskExe) { throw 'Shortcut points to wrong app' }
+    $taskLinkIndex++
   }
   if (-not (Test-Path -LiteralPath (Join-Path $taskInstall 'resources/codex/LICENSE-Codex.txt'))) { throw 'Bundled component license missing' }
   $taskRuntime = Join-Path $taskInstall 'resources/codex/vendor/x86_64-pc-windows-msvc/bin/codex.exe'

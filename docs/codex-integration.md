@@ -24,9 +24,9 @@ codex login
 
 使用 ChatGPT 账号完成登录。当前实现接受 `chatgpt` 和 `chatgptAuthTokens` 账号类型；仅配置 API Key 不满足这个 Demo 的登录检查。
 
-优先使用安装包资源目录中的组件，其次检查开发环境和本机现有安装。自定义程序路径和模型收在「高级选项」，普通用户无需填写。
+优先使用安装包资源目录中的组件，其次检查开发环境和本机现有安装。自定义程序路径收在「高级选项」。模型、推理强度和速度在独立的「模型与推理」区域选择。
 
-模型名留空时使用本机 Codex 配置。手动填写的模型必须对当前账号可用；程序没有把模型目录列表当作账号权限证明。
+连接检查和刷新时分页读取 `model/list`，使用返回的模型、`supportedReasoningEfforts` 和 `serviceTiers` 构建选项，兼容旧的 `additionalSpeedTiers`。目录不代表账号权限。设置以 `model`、`reasoningEffort`、`serviceTier` 保存在本机；分析及选牌回合通过 `turn/start` 的 `model`、`effort`、`serviceTier` 传入。空值不覆盖连接配置，标准速度显式发送 `default`。调用前校验模型及档位，阻止无效组合进入推理回合。
 
 ## 独立检查连接
 

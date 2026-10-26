@@ -41,7 +41,7 @@ try {
   $taskSmoke = Start-Process -FilePath $taskExe -ArgumentList '--smoke-test' -WorkingDirectory $taskRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $taskResults 'installed.stdout.log') -RedirectStandardError (Join-Path $taskResults 'installed.stderr.log') -Wait -PassThru
   if ($taskSmoke.ExitCode -ne 0) { throw "Installed app smoke test failed: $(Get-Content -LiteralPath (Join-Path $taskResults 'installed.stderr.log') -Raw)" }
   $taskSmokeResult = Get-Content -LiteralPath (Join-Path $taskResults 'smoke.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-  if (-not $taskSmokeResult.passed -or -not $taskSmokeResult.welcomeVerified -or -not $taskSmokeResult.bundledConnectionVerified) { throw 'Installed app test did not verify onboarding and bundled connection' }
+  if (-not $taskSmokeResult.passed -or -not $taskSmokeResult.welcomeVerified -or -not $taskSmokeResult.bundledConnectionVerified -or -not $taskSmokeResult.generationPreferencesVerified) { throw 'Installed app test did not verify onboarding, connection and generation preferences' }
   $taskResult = [ordered]@{ version=$taskVersion; installed=$true; desktopShortcut=$true; startMenuShortcut=$true; uninstallRegistered=$true; installedAppSmoke=$true; bundledConnection=$true }
 } finally {
   $taskUninstaller = Join-Path $taskInstall 'Uninstall Hextech Agent.exe'

@@ -1,5 +1,5 @@
 import { CodexClient } from './codex'
-import type { ConnectionState } from '../src/shared'
+import type { ConnectionState, ModelCatalog } from '../src/shared'
 
 export function loginURL(value: string): string {
   const url = new URL(value)
@@ -9,6 +9,8 @@ export function loginURL(value: string): string {
 
 export class ConnectionManager {
   state: ConnectionState = { status: 'unchecked', message: '登录后即可开始真实分析', email: '' }
+  catalog: ModelCatalog = {status:'idle',models:[],error:''}
+  onCatalog: (catalog: ModelCatalog) => void = () => {}
   private client: CodexClient
   private busy = false
   private loginId: string | null = null
@@ -25,6 +27,23 @@ export class ConnectionManager {
   private set(status: ConnectionState['status'], message: string, email = '') { this.state = { status, message, email }; this.emit({ ...this.state }) }
   async check(executable: string) { await this.begin(executable, false) }
   async login(executable: string) { await this.begin(executable, true) }
+  async refreshModels(executable: string) { await this.begin(executable,false) }
+  invalidate() {
+    this.close(); this.catalog={status:'idle',models:[],error:''}; this.onCatalog(structuredClone(this.catalog))
+    this.set('unchecked','连接组件已更改，请重新检查连接')
+  }
+  private async loadModels(epoch: number) {
+    this.catalog={...this.catalog,status:'loading',error:''}; this.onCatalog(structuredClone(this.catalog))
+    try {
+      const models=await this.client.listModels()
+      if(epoch!==this.generation)return
+      this.catalog={status:'ready',models,error:''}
+    } catch(error) {
+      if(epoch!==this.generation)return
+      this.catalog={...this.catalog,status:'error',error:(error as Error).message}
+    }
+    this.onCatalog(structuredClone(this.catalog))
+  }
   private isLoggingIn() { return this.state.status === 'login' }
   private async begin(executable: string, login: boolean) {
     if (this.busy || this.isLoggingIn()) return
@@ -32,6 +51,8 @@ export class ConnectionManager {
     this.set('checking', '正在检查连接组件与登录状态…')
     try {
       const account = await this.client.connect(executable, { allowSignedOut: true })
+      if (epoch !== this.generation) return
+      await this.loadModels(epoch)
       if (epoch !== this.generation) return
       if (account && ['chatgpt', 'chatgptAuthTokens'].includes(account.type)) {
         this.set('ready', '已连接，可以开始真实分析', account.email || '')
@@ -45,7 +66,10 @@ export class ConnectionManager {
       await this.openBrowser(loginURL(result.authUrl))
       if (epoch !== this.generation || this.state.status !== 'login') return
       this.timer = setTimeout(() => { void this.cancel('登录等待已结束，请重新登录') }, 10 * 60 * 1000)
-    } catch(error) { if (epoch === this.generation) { this.close(); this.set('error', (error as Error).message) } }
+    } catch(error) { if (epoch === this.generation) {
+      this.catalog={...this.catalog,status:'error',error:(error as Error).message}; this.onCatalog(structuredClone(this.catalog))
+      this.close(); this.set('error', (error as Error).message)
+    } }
     finally { if (epoch === this.generation) this.busy = false }
   }
   private async finishLogin() {
@@ -55,6 +79,8 @@ export class ConnectionManager {
       const result = await this.client.request('account/read', {})
       if (epoch !== this.generation) return
       if (!result.account || !['chatgpt', 'chatgptAuthTokens'].includes(result.account.type)) throw new Error('登录尚未保存，请重试')
+      await this.loadModels(epoch)
+      if (epoch !== this.generation) return
       this.set('ready', '登录成功，可以开始真实分析', result.account.email || '')
       this.close()
     } catch(error) { if (epoch === this.generation) { this.close(); this.set('error', (error as Error).message) } }
@@ -69,5 +95,6 @@ export class ConnectionManager {
     this.generation++; this.busy = false; this.loginId = null
     if (this.timer) clearTimeout(this.timer)
     this.timer = undefined; this.client.close()
+    if(this.catalog.status==='loading') { this.catalog={...this.catalog,status:'idle'}; this.onCatalog(structuredClone(this.catalog)) }
   }
 }

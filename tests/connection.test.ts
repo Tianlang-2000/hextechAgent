@@ -9,6 +9,8 @@ class FakeClient {
   calls: string[] = []
   closed = 0
   authUrl = 'https://auth.openai.com/authorize?test=1'
+  modelError: Error | null = null
+  async listModels() { this.calls.push('model/list'); if(this.modelError)throw this.modelError; return [] }
   async connect(_executable: string, options: any) { assert.equal(options.allowSignedOut,true); this.calls.push('connect'); return this.account }
   async request(method: string) {
     this.calls.push(method)
@@ -27,7 +29,8 @@ test('signed-out connection check needs no terminal and never starts a model tur
   const {client,manager}=setup()
   await manager.check('')
   assert.equal(manager.state.status,'signed-out')
-  assert.deepEqual(client.calls,['connect'])
+  assert.deepEqual(client.calls,['connect','model/list'])
+  assert.equal(manager.catalog.status,'ready')
   manager.close()
 })
 test('existing ChatGPT login is reused without opening another browser',async()=>{
@@ -55,4 +58,18 @@ test('only official HTTPS login pages may open in the browser',async()=>{
   const {client,manager,urls}=setup();client.authUrl='https://attacker.example/login'
   await manager.login('');assert.equal(manager.state.status,'error');assert.equal(urls.length,0)
   manager.close()
+})
+
+test('model discovery failure does not falsely sign out a valid account and can be retried',async()=>{
+  const {client,manager}=setup();client.account={type:'chatgpt'};client.modelError=new Error('temporary catalog failure')
+  await manager.check('');assert.equal(manager.state.status,'ready');assert.equal(manager.catalog.status,'error')
+  client.modelError=null;await manager.refreshModels('');assert.equal(manager.catalog.status,'ready');manager.close()
+})
+
+test('cancelled catalog loading cannot publish stale models',async()=>{
+  const {client,manager}=setup();let finish:()=>void=()=>{}
+  client.listModels=async()=>{await new Promise<void>(resolve=>{finish=resolve});return []}
+  const pending=manager.check('');await new Promise(resolve=>setTimeout(resolve,0))
+  await manager.cancel();finish();await pending
+  assert.equal(manager.catalog.status,'idle');assert.equal(manager.state.status,'signed-out')
 })

@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Activity, ArrowDownToLine, ArrowRight, Check, ChevronRight, CircleHelp, Code2, Cpu, FileText, Folder, Hexagon, Layers3, LoaderCircle, Minus, Monitor, Pause, Play, Radar, Settings2, ShieldCheck, Sparkles, WandSparkles, X, Zap } from '@lucide/vue'
-import type { AgentState, ConnectionState } from './shared'
+import type { AgentState, ConnectionState, ModelCatalog } from './shared'
+import ModelPreferences from './components/ModelPreferences.vue'
+import { effortLabel, speedLabel, supportsEffort, supportsTier } from './generation-options'
 const overlay = location.hash === '#overlay'
 document.documentElement.classList.toggle('is-overlay',overlay)
 const state = ref<AgentState>({ status:'idle', settings:{ mode:'demo',root:'',executable:'',model:'',allowWrite:false,floating:true },account:'',quotaRemaining:null,files:0,rounds:0,solved:0,queued:0,currentFile:'',finding:null,backlog:[],report:'',reportPath:'',logs:[],error:'' })
@@ -12,6 +14,16 @@ const tab = ref('overview')
 const pending = ref(false)
 const executable = ref('')
 const model = ref('')
+const effort = ref('')
+const tier = ref('')
+const catalog = ref<ModelCatalog>({status:'idle',models:[],error:''})
+const activeModel = computed(()=>catalog.value.models.find(m=>m.model===model.value))
+const invalidPreferences = computed(()=>catalog.value.status==='ready' && (!!model.value&&!activeModel.value || !supportsEffort(activeModel.value,effort.value) || !supportsTier(activeModel.value,tier.value)))
+const generationSummary = computed(()=>[
+  catalog.value.models.find(m=>m.model===state.value.settings.model)?.name || state.value.settings.model || '默认模型',
+  state.value.settings.reasoningEffort?`${effortLabel(state.value.settings.reasoningEffort)}推理`:'默认推理',
+  speedLabel(state.value.settings.serviceTier||''),
+].join(' · '))
 const welcomeOpen = ref(false)
 const connection = ref<ConnectionState>({ status: 'unchecked', message: '登录后即可开始真实分析', email: '' })
 const connecting = computed(() => ['checking','login'].includes(connection.value.status))
@@ -25,6 +37,7 @@ const isFollowup = computed(()=>state.value.status==='followup')
 const quotaText = computed(()=>state.value.settings.mode==='demo' ? '不消耗额度' : state.value.quotaRemaining===null ? '额度暂不可用' : `${Math.round(state.value.quotaRemaining)}% 剩余`)
 let unsubscribe: (()=>void)|undefined
 let unsubscribeConnection: (()=>void)|undefined
+let unsubscribeModels: (()=>void)|undefined
 let toastTimer: ReturnType<typeof setTimeout>
 function notify(text: string) { toast.value=text; clearTimeout(toastTimer); toastTimer=setTimeout(()=>toast.value='',4500) }
 async function action(name:string,payload?:unknown) {
@@ -33,7 +46,17 @@ async function action(name:string,payload?:unknown) {
 }
 async function toggleRun() { pending.value=true; try { await action(running.value ? 'stop':'start') } finally { pending.value=false } }
 async function selectRoot() { if (!window.hextech) return; const root=await window.hextech.chooseRoot(); if(root) await action('settings',{root}) }
-async function saveSettings() { if (await action('settings',{executable:executable.value,model:model.value})) settingsOpen.value=false }
+function preferences() { return {executable:executable.value,model:model.value,reasoningEffort:effort.value,serviceTier:tier.value} }
+async function saveSettings() {
+  if (invalidPreferences.value) { notify('请重新选择当前模型支持的推理强度和速度'); return }
+  if (await action('settings',preferences())) settingsOpen.value=false
+}
+watch(settingsOpen,async open=>{
+  if(!open)return
+  executable.value=state.value.settings.executable; model.value=state.value.settings.model
+  effort.value=state.value.settings.reasoningEffort||''; tier.value=state.value.settings.serviceTier||''
+  if(catalog.value.status==='idle'&&!running.value)await action('models-refresh')
+})
 async function selectMode(mode: 'demo' | 'codex') {
   if (await action('settings',{mode})) {
     if (mode==='codex') await action('connection-check')
@@ -48,7 +71,8 @@ async function startDemo() {
 async function connectFromWelcome() { welcomeOpen.value=false; settingsOpen.value=true; await selectMode('codex') }
 async function startConnected() {
   if (connection.value.status!=='ready') return
-  if (await action('settings',{onboardingDone:true,executable:executable.value,model:model.value})) { settingsOpen.value=false; await action('start') }
+  if (invalidPreferences.value) { notify('请重新选择当前模型支持的推理强度和速度'); return }
+  if (await action('settings',{onboardingDone:true,...preferences()})) { settingsOpen.value=false; await action('start') }
 }
 onMounted(async()=>{
   if (window.hextech) {
@@ -58,15 +82,18 @@ onMounted(async()=>{
     welcomeOpen.value=!overlay && !state.value.settings.onboardingDone
     unsubscribeConnection=window.hextech.onConnection(value=>{connection.value=value})
     connection.value=await window.hextech.getConnection()
+    unsubscribeModels=window.hextech.onModels(value=>{catalog.value=value})
+    catalog.value=await window.hextech.getModels()
+    effort.value=state.value.settings.reasoningEffort||''; tier.value=state.value.settings.serviceTier||''
   }
 })
-onUnmounted(()=>{unsubscribe?.();unsubscribeConnection?.();clearTimeout(toastTimer)})
+onUnmounted(()=>{unsubscribe?.();unsubscribeConnection?.();unsubscribeModels?.();clearTimeout(toastTimer)})
 </script>
 
 <template>
   <div :class="['app-shell',{floating:overlay}]">
     <header class="titlebar">
-      <div class="brand"><span class="brand-mark"><Hexagon :size="23"/><span>H</span></span><strong>HEXTECH <em>AGENT</em></strong><span class="version">0.2</span></div>
+      <div class="brand"><span class="brand-mark"><Hexagon :size="23"/><span>H</span></span><strong>HEXTECH <em>AGENT</em></strong><span class="version">0.3</span></div>
       <div class="title-center"><span class="tiny-dot"/> {{ state.settings.mode==='demo' ? '演示空间' : 'CODEX · 本机连接' }}</div>
       <div class="window-actions"><button v-if="overlay" title="收起卡牌，巡检继续" @click="action('hide-overlay')"><Minus :size="17"/></button><button v-else title="最小化" @click="action('minimize')"><Minus :size="17"/></button><button class="close-window" title="关闭并停止所有任务" @click="action('close')"><X :size="18"/></button></div>
     </header>
@@ -86,11 +113,12 @@ onUnmounted(()=>{unsubscribe?.();unsubscribeConnection?.();clearTimeout(toastTim
 
       <main>
         <template v-if="!overlay">
-          <div class="page-heading"><div><div class="eyebrow">YOUR AMBIENT COPILOT</div><h1>{{ tab==='activity'?'每一步，都有迹可循':'把下一步，交给海克斯。' }}</h1><p>安静地发现问题，在需要你的时候，给出选择。</p></div><button class="icon-button" title="连接与设置" @click="settingsOpen=true"><Settings2 :size="19"/></button></div>
+          <div class="page-heading"><div><div class="eyebrow">YOUR AMBIENT COPILOT</div><h1>{{ tab==='activity'?'每一步，都有迹可循':'把下一步，交给海克斯。' }}</h1><p>安静地发现问题，在需要你的时候，给出选择。</p></div><button data-testid="settings-open" class="icon-button" title="连接与设置" @click="settingsOpen=true"><Settings2 :size="19"/></button></div>
           <section class="monitor-panel">
             <div class="monitor-left"><div :class="['radar-orb',{spinning:running}]"><Radar :size="28"/><i/><i/></div><div><div class="monitor-title"><span :class="['live-dot',{off:!running}]"/>{{ statusText }}<span class="mode-chip">{{ state.settings.mode==='demo'?'演示模式':'CODEX' }}</span></div><p :title="statusDetail">{{ statusDetail }}</p></div></div>
             <div class="monitor-right"><span class="quota"><Zap :size="14"/>{{ quotaText }}</span><button :class="['run-button',{running}]" :disabled="pending" @click="toggleRun"><LoaderCircle v-if="pending" class="spin" :size="15"/><Pause v-else-if="running" :size="15"/><Play v-else :size="15"/>{{ running?'停止巡检':'开始巡检' }}</button></div>
             <div class="monitor-bottom"><span><Monitor :size="13"/><span class="root-path" :title="state.settings.root">{{ state.settings.root || '启动 Electron 后自动定位目录' }}</span></span><button :disabled="running" @click="selectRoot">更换目录 <ChevronRight :size="13"/></button><span class="privacy"><ShieldCheck :size="13"/>{{ state.settings.allowWrite?'选定方案后可修改文件':'只读巡检 · 由你决定下一步' }}</span></div>
+            <div v-if="state.settings.mode==='codex'" class="generation-summary"><Cpu :size="12"/><span>{{generationSummary}}</span><button @click="settingsOpen=true">调整</button></div>
           </section>
           <div v-if="state.error" class="error-banner"><CircleHelp :size="17"/><span>{{ state.error }}</span></div>
         </template>
@@ -126,7 +154,11 @@ onUnmounted(()=>{unsubscribe?.();unsubscribeConnection?.();clearTimeout(toastTim
     <div v-if="welcomeOpen" class="modal-backdrop"><section class="modal welcome-modal"><div class="welcome-brand"><Hexagon :size="58" :stroke-width="1"/><Sparkles :size="23"/></div><div class="eyebrow">WELCOME TO HEXTECH</div><h2>准备好了，轻松开始。</h2><p class="modal-intro">不用设置复杂参数。先看看海克斯怎样发现问题，<br/>再用三张牌帮你决定下一步。</p><div class="welcome-steps"><span><Check :size="14"/> 安装已经完成</span><span><ShieldCheck :size="14"/> 默认只读，不改你的文件</span><span><Monitor :size="14"/> 下次双击桌面图标即可打开</span></div><button class="run-button welcome-primary" data-testid="welcome-demo" :disabled="pending" @click="startDemo"><Play :size="16"/>先体验一下 <span>无需登录 · 不消耗额度</span></button><button class="welcome-connect" :disabled="pending" @click="connectFromWelcome">连接我的 ChatGPT，开始真实分析 <ArrowRight :size="15"/></button><p class="welcome-note">真实分析需要登录有 Codex 使用权限的账号。</p></section></div>
     <div v-if="settingsOpen" class="modal-backdrop" @click.self="settingsOpen=false"><section class="modal"><div class="modal-heading"><h2>连接与设置</h2><button class="icon-button" @click="settingsOpen=false"><X :size="19"/></button></div><p class="modal-intro">先体验，或连接账号后分析自己的文件。</p><label>运行模式</label><div class="mode-selector"><button :class="{selected:state.settings.mode==='demo'}" :disabled="running||connecting" @click="selectMode('demo')"><Sparkles :size="17"/><strong>演示模式</strong><small>样例方案 · 无需登录</small></button><button :class="{selected:state.settings.mode==='codex'}" :disabled="running||connecting" @click="selectMode('codex')"><Cpu :size="17"/><strong>真实分析</strong><small>连接 ChatGPT 账号</small></button></div>
     <div v-if="state.settings.mode==='codex'" :class="['connection-panel',connection.status]" aria-live="polite"><div class="connection-heading"><LoaderCircle v-if="connecting" class="spin" :size="18"/><Check v-else-if="connection.status==='ready'" :size="18"/><Cpu v-else :size="18"/><strong>{{ connection.status==='ready'?(connection.email||'账号已连接'):'ChatGPT 账号连接' }}</strong></div><p>{{ connection.message }}</p><div class="connection-actions"><button v-if="connection.status!=='ready'&&connection.status!=='login'" class="run-button" :disabled="connecting||running" @click="action('login')">登录 ChatGPT <ArrowRight :size="14"/></button><button v-if="connection.status==='login'" class="secondary-button" @click="action('cancel-login')">取消登录</button><button class="connection-retry" :disabled="connecting||running" @click="action('connection-check')">重新检查</button></div><small>连接组件已随安装包提供。登录在浏览器中完成，无需命令行。</small></div>
-    <p class="setting-note">{{ state.settings.mode==='codex'?'真实分析会将所选目录的文件节选交给模型处理，并使用账号额度。':'演示使用独立样例目录，不需要登录，不消耗账号额度。' }}</p><details class="advanced-settings"><summary>高级选项 <span>通常无需修改</span></summary><label>连接组件路径 <span>留空使用内置组件</span></label><input v-model="executable" :disabled="running||connecting" placeholder="自动使用内置组件"/><label>模型 <span>留空使用默认配置</span></label><input v-model="model" :disabled="running||connecting" placeholder="使用账号可用的模型名称"/></details><div class="setting-toggle"><div><strong>桌面悬浮卡牌</strong><small>方案就绪后，在桌面弹出独立窗口</small></div><button :disabled="running" :class="['toggle',{on:state.settings.floating}]" @click="action('settings',{floating:!state.settings.floating})"><i/></button></div><div class="setting-toggle"><div><strong>选牌后允许修改文件</strong><small>默认关闭；开启后，选牌才会触发文件修改</small></div><button :disabled="running" :class="['toggle',{on:state.settings.allowWrite}]" @click="action('settings',{allowWrite:!state.settings.allowWrite})"><i/></button></div><p v-if="running" class="setting-note">先停止巡检，即可修改设置。</p><div class="modal-actions"><button class="secondary-button" @click="settingsOpen=false">关闭</button><button v-if="state.settings.mode==='codex'&&connection.status==='ready'" class="run-button" :disabled="running" @click="startConnected"><Play :size="15"/>开始真实巡检</button><button v-else class="run-button" :disabled="running||connecting" @click="saveSettings"><Check :size="15"/>保存设置</button></div></section></div>
+    <p class="setting-note">{{ state.settings.mode==='codex'?'真实分析会将所选目录的文件节选交给模型处理，并使用账号额度。':'演示不会调用模型；下面的选择将在真实分析时生效。' }}</p>
+    <ModelPreferences v-model:model="model" v-model:effort="effort" v-model:tier="tier" :catalog="catalog" :disabled="running||connecting" @refresh="action('models-refresh')"/>
+    <details class="advanced-settings"><summary>高级选项 <span>通常无需修改</span></summary><label>连接组件路径 <span>留空使用内置组件</span></label><input v-model="executable" :disabled="running||connecting" placeholder="自动使用内置组件"/></details>
+    <div class="setting-toggle"><div><strong>桌面悬浮卡牌</strong><small>方案就绪后，在桌面弹出独立窗口</small></div><button :disabled="running" :class="['toggle',{on:state.settings.floating}]" @click="action('settings',{floating:!state.settings.floating})"><i/></button></div><div class="setting-toggle"><div><strong>选牌后允许修改文件</strong><small>默认关闭；开启后，选牌才会触发文件修改</small></div><button :disabled="running" :class="['toggle',{on:state.settings.allowWrite}]" @click="action('settings',{allowWrite:!state.settings.allowWrite})"><i/></button></div>
+    <p v-if="running" class="setting-note">先停止巡检，即可修改设置。</p><div class="modal-actions"><button class="secondary-button" @click="settingsOpen=false">关闭</button><button v-if="state.settings.mode==='codex'&&connection.status==='ready'" class="run-button" :disabled="running||connecting||invalidPreferences" @click="startConnected"><Play :size="15"/>开始真实巡检</button><button data-testid="settings-save" class="run-button" :disabled="running||connecting||invalidPreferences" @click="saveSettings"><Check :size="15"/>保存设置</button></div></section></div>
     <div v-if="reportOpen" class="modal-backdrop" @click.self="reportOpen=false"><section class="modal report-modal"><div class="modal-heading"><h2>执行报告</h2><button class="icon-button" @click="reportOpen=false"><X :size="19"/></button></div><pre>{{ state.report }}</pre><div class="modal-actions"><button class="run-button" @click="action('report')"><ArrowDownToLine :size="16"/>打开报告文件</button></div></section></div>
     <div v-if="toast" class="toast"><CircleHelp :size="16"/>{{ toast }}</div>
   </div>

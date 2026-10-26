@@ -19,6 +19,7 @@ if (process.platform === 'win32') app.setAppUserModelId('com.hextech.agent')
 if (!smokeTest && !app.requestSingleInstanceLock()) app.quit()
 app.on('second-instance',()=>{ if(main?.isMinimized()) main.restore(); main?.show(); main?.focus() })
 if (smokeTest) {
+  app.commandLine.appendSwitch('disable-features','CalculateNativeWinOcclusion')
   const results = path.join(process.cwd(),'test-results')
   mkdirSync(results,{ recursive:true })
   app.setPath('userData', mkdtempSync(path.join(results,'electron-profile-')))
@@ -37,7 +38,7 @@ function createWindow(floating = false) {
     frame: false, transparent: floating, backgroundColor: floating ? '#00000000' : '#0c1014',
     alwaysOnTop: floating, skipTaskbar: floating, show: false,
     icon: app.isPackaged ? path.join(process.resourcesPath, 'brand/icon.png') : path.join(dirname, '../build/icon.png'),
-    webPreferences: { preload: path.join(dirname,'preload.mjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+    webPreferences: { preload: path.join(dirname,'preload.mjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, ...(smokeTest ? {backgroundThrottling:false} : {}) },
   })
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event,url) => { if (url !== window.webContents.getURL()) event.preventDefault() })
@@ -66,13 +67,17 @@ app.whenReady().then(async () => {
     'launch-plan.md': '# 产品发布计划\n\n本周完成桌面 demo 与 Codex 联调。\nTODO: 补上验收标准、负责人和回退策略。\n',
     'example.ts': "export async function loadTasks() {\n  const response = await fetch('/api/tasks')\n  return response.json()\n}\n",
   })) { try { await readFile(path.join(demoRoot,name)) } catch { await writeFile(path.join(demoRoot,name),text) } }
-  const defaults: Settings = { mode: 'demo', root: demoRoot, executable: '', model: '', allowWrite: false, floating: true, onboardingDone: false }
+  const defaults: Settings = { mode: 'demo', root: demoRoot, executable: '', model: '', reasoningEffort:'', serviceTier:'', allowWrite: false, floating: true, onboardingDone: false }
   let saved: Partial<Settings> = {}
   try { saved = JSON.parse(await readFile(path.join(userDir,'settings.json'),'utf8')) } catch { /* First launch. */ }
   engine = new AgentEngine({ ...defaults, ...saved, ...(smokeTest ? { mode: 'demo' as const, root: demoRoot, floating: true, onboardingDone: false } : {}), allowWrite: false },path.join(userDir,'reports'),broadcast)
   connection = new ConnectionManager(state => {
     for (const window of [main, overlay]) if (window && !window.isDestroyed()) window.webContents.send('hextech:connection', state)
   }, url => shell.openExternal(url))
+  connection.onCatalog = catalog => {
+    for(const window of [main,overlay]) if(window&&!window.isDestroyed()) window.webContents.send('hextech:models',catalog)
+  }
+  ipcMain.handle('hextech:models',()=>connection.catalog)
   ipcMain.handle('hextech:connection', () => connection.state)
   ipcMain.handle('hextech:state', () => engine.state)
   ipcMain.handle('hextech:root', async () => {
@@ -84,6 +89,7 @@ app.whenReady().then(async () => {
       case 'start': await engine.start(); break
       case 'stop': await engine.stop(); break
       case 'connection-check': await connection.check(engine.state.settings.executable); break
+      case 'models-refresh': await connection.refreshModels(engine.state.settings.executable); break
       case 'login': await connection.login(engine.state.settings.executable); break
       case 'cancel-login': await connection.cancel(); break
       case 'choose': if (typeof payload !== 'string') throw new Error('无效方案'); await engine.choose(payload); break
@@ -91,14 +97,16 @@ app.whenReady().then(async () => {
       case 'deeper': await engine.next(true); break
       case 'settings': {
         const clean: Partial<Settings> = {}
-        for (const key of ['root','executable','model'] as const) if (typeof payload?.[key] === 'string') clean[key] = payload[key]
+        for (const key of ['root','executable','model','reasoningEffort','serviceTier'] as const) if (typeof payload?.[key] === 'string') clean[key] = payload[key]
         for (const key of ['allowWrite','floating'] as const) if (typeof payload?.[key] === 'boolean') clean[key] = payload[key]
         if (typeof payload?.onboardingDone === 'boolean') clean.onboardingDone = payload.onboardingDone
         if (payload?.mode === 'demo' || payload?.mode === 'codex') {
           clean.mode = payload.mode
           if (payload.mode !== engine.state.settings.mode) clean.root = payload.mode === 'demo' ? demoRoot : app.getPath('desktop')
         }
+        const changedExecutable=clean.executable!==undefined&&clean.executable!==engine.state.settings.executable
         await engine.configure(clean)
+        if(changedExecutable)connection.invalidate()
         await writeFile(path.join(userDir,'settings.json'),JSON.stringify(engine.state.settings,null,2),'utf8')
         break
       }
@@ -144,14 +152,37 @@ app.whenReady().then(async () => {
       await writeFile(path.join(demoRoot,'new-task.md'),'# 新任务\nTODO: 确定下周交付负责人。')
       await wait(()=>engine.state.logs.some(log=>log.text.includes('new-task.md')) && engine.state.backlog.some(item=>item.source==='new-task.md'))
       await engine.stop()
-      if (app.isPackaged) {
-        await connection.check('')
-        if (!['ready','signed-out'].includes(connection.state.status)) throw new Error(`Bundled connection component failed: ${connection.state.message}`)
+      await connection.refreshModels('')
+      if (!['ready','signed-out'].includes(connection.state.status)) throw new Error(`Bundled connection component failed: ${connection.state.message}`)
+      const selected=connection.catalog.models.find(model=>model.efforts.length>0)
+      if(connection.catalog.status!=='ready'||!selected)throw new Error('Model catalog was not available')
+      const preferences={model:selected.model,reasoningEffort:selected.efforts.at(-1)!.id,serviceTier:selected.tiers[0]?.id||'default'}
+      await main.webContents.executeJavaScript('document.querySelector("[data-testid=settings-open]").click()')
+      await new Promise(resolve=>setTimeout(resolve,100))
+      await main.webContents.executeJavaScript(`(() => {const element=document.querySelector('[data-testid=model-select]');element.value=${JSON.stringify(preferences.model)};element.dispatchEvent(new Event('change',{bubbles:true}));})()`)
+      await new Promise(resolve=>setTimeout(resolve,100))
+      await main.webContents.executeJavaScript(`(() => {for(const [testid,value] of ${JSON.stringify([['effort-select',preferences.reasoningEffort],['speed-select',preferences.serviceTier]])}){const element=document.querySelector('[data-testid='+testid+']');element.value=value;element.dispatchEvent(new Event('change',{bubbles:true}));}})()`)
+      await new Promise(resolve=>setTimeout(resolve,100))
+      await main.webContents.executeJavaScript('document.querySelector("[data-testid=settings-save]").click()')
+      await wait(()=>engine.state.settings.model===preferences.model&&engine.state.settings.reasoningEffort===preferences.reasoningEffort&&engine.state.settings.serviceTier===preferences.serviceTier)
+      const saveDeadline=Date.now()+5000
+      while(await main.webContents.executeJavaScript('Boolean(document.querySelector("[data-testid=model-select]"))')) {
+        if(Date.now()>saveDeadline)throw new Error('Settings dialog did not close after saving')
+        await new Promise(resolve=>setTimeout(resolve,50))
       }
+      const stored=JSON.parse(await readFile(path.join(userDir,'settings.json'),'utf8'))
+      if(stored.model!==preferences.model||stored.reasoningEffort!==preferences.reasoningEffort||stored.serviceTier!==preferences.serviceTier)throw new Error('Generation preferences were not persisted')
+      await main.webContents.executeJavaScript('document.querySelector("[data-testid=settings-open]").click()')
+      await new Promise(resolve=>setTimeout(resolve,100))
+      const values=await main.webContents.executeJavaScript("['model-select','effort-select','speed-select'].map(testid=>document.querySelector('[data-testid='+testid+']').value)")
+      if(JSON.stringify(values)!==JSON.stringify([preferences.model,preferences.reasoningEffort,preferences.serviceTier]))throw new Error('Generation selections did not survive reopening settings')
+      main.show(); main.focus()
+      await new Promise(resolve=>setTimeout(resolve,300))
+      await writeFile(path.join(outputDir,'generation-settings.png'),(await main.webContents.capturePage()).toPNG())
       const rounds = engine.state.rounds
       await new Promise(resolve=>setTimeout(resolve,1600))
       if (engine.state.rounds!==rounds || engine.state.status!=='stopped') throw new Error('Stop failed')
-      await writeFile(path.join(outputDir,'smoke.json'),JSON.stringify({ passed:true,version:app.getVersion(),welcomeVerified:welcome,bundledConnectionVerified:app.isPackaged,rounds,files:engine.state.files,reportWritten,newTaskPrioritized:true,stopped:true },null,2))
+      await writeFile(path.join(outputDir,'smoke.json'),JSON.stringify({ passed:true,version:app.getVersion(),welcomeVerified:welcome,bundledConnectionVerified:app.isPackaged,generationPreferencesVerified:true,rounds,files:engine.state.files,reportWritten,newTaskPrioritized:true,stopped:true },null,2))
       quitting = true; app.quit()
     } catch(error) { console.error(error); quitting = true; await engine.stop(); app.exit(1) }
   }

@@ -3,6 +3,8 @@ import { createInterface } from 'node:readline'
 import { access, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
+import { parseModels, turnGeneration, validateGeneration, type GenerationOptions } from './models'
+import type { ModelOption } from '../src/shared'
 
 type Pending = { resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
 export async function findCodex(): Promise<string> {
@@ -45,6 +47,7 @@ export class CodexClient {
   private child: ChildProcessWithoutNullStreams | null = null
   private pending = new Map<number, Pending>()
   private nextId = 1
+  private modelCache: ModelOption[] | null = null
   private active: { thread: string; resolve: (value: string) => void; reject: (error: Error) => void; text: string; timer: ReturnType<typeof setTimeout> } | null = null
   onQuota: (value: any) => void = () => {}
   onProgress: (value: string) => void = () => {}
@@ -66,7 +69,7 @@ export class CodexClient {
       this.child = null
       this.fail(new Error(`Codex 连接已退出。${diagnostic.slice(-600)}`))
     })
-    await this.request('initialize', { clientInfo: { name: 'hextech_agent', title: 'Hextech Agent', version: '0.2.2' } })
+    await this.request('initialize', { clientInfo: { name: 'hextech_agent', title: 'Hextech Agent', version: '0.3.0' } })
     this.send({ method: 'initialized', params: {} })
     const account = await this.request('account/read', {})
     if (!options.allowSignedOut && (!account.account || !['chatgpt', 'chatgptAuthTokens'].includes(account.account.type))) {
@@ -117,13 +120,33 @@ export class CodexClient {
     }
   }
   async limits() { const result = await this.request('account/rateLimits/read'); this.onQuota(result); return result }
-  async run(cwd: string, prompt: string, options: { model?: string; write?: boolean; schema?: unknown; signal: AbortSignal }) {
+  async listModels(): Promise<ModelOption[]> {
+    if (this.modelCache) return this.modelCache
+    const models = new Map<string,ModelOption>()
+    const cursors = new Set<string>()
+    let cursor: string | undefined
+    for (let page=0;page<20;page++) {
+      const result = await this.request('model/list',{includeHidden:false,...(cursor?{cursor}:{})})
+      for (const model of parseModels(result.data)) models.set(model.model,model)
+      if (!result.nextCursor) { this.modelCache=[...models.values()]; return this.modelCache }
+      const next: unknown = result.nextCursor
+      if (typeof next!=='string'||cursors.has(next)) throw new Error('模型目录分页异常，请重新连接')
+      cursor=next; cursors.add(next)
+    }
+    throw new Error('模型目录页数超出限制，请重新连接')
+  }
+  async run(cwd: string, prompt: string, options: GenerationOptions & { write?: boolean; schema?: unknown; signal: AbortSignal }) {
     if (options.signal.aborted) throw new Error('任务已取消')
+    const needsCatalog = !!(options.model || options.reasoningEffort || (options.serviceTier && options.serviceTier!=='default'))
+    const models = needsCatalog ? await this.listModels() : []
+    if (options.signal.aborted) throw new Error('任务已取消')
+    if (options.model) validateGeneration(options,models)
     const result = await this.request('thread/start', {
       cwd, approvalPolicy: 'never', sandbox: options.write ? 'workspace-write' : 'read-only',
       ...(options.model ? { model: options.model } : {}),
     })
     if (options.signal.aborted) throw new Error('任务已取消')
+    validateGeneration(options,models,result.model)
     const thread = result.thread.id
     return new Promise<string>((resolve, reject) => {
       const cleanup = () => options.signal.removeEventListener('abort', abort)
@@ -137,6 +160,7 @@ export class CodexClient {
       }
       this.request('turn/start', {
         threadId: thread, input: [{ type: 'text', text: prompt }],
+        ...turnGeneration(options),
         sandboxPolicy: options.write
           ? { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: false }
           : { type: 'readOnly', networkAccess: false },
@@ -154,6 +178,7 @@ export class CodexClient {
     if (this.active) { const active = this.active; this.active = null; clearTimeout(active.timer); active.reject(error) }
   }
   close() {
+    this.modelCache = null
     const child = this.child; this.child = null
     this.fail(new Error('Codex 连接已停止'))
     child?.stdin.end()

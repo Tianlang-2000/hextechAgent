@@ -19,6 +19,11 @@ test('new actions outrank old tasks and duplicate changes coalesce', () => {
   assert.equal(queue.take()?.file,'new.md')
   assert.equal(queue.take()?.file,'old.ts')
 })
+test('queue snapshot preserves priority and order when restored',()=>{
+  const first=new TaskQueue(); first.restore([{file:'old',priority:false,at:1},{file:'new',priority:true,at:2}])
+  const second=new TaskQueue(); second.restore(first.snapshot())
+  assert.equal(second.take()?.file,'new'); assert.equal(second.take()?.file,'old')
+})
 
 test('scanner excludes secrets, generated directories, sibling paths and unsupported binary formats', () => {
   const root = path.resolve('test-workspace')

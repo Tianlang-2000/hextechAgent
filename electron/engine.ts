@@ -24,6 +24,7 @@ export class AgentEngine {
   private running = false
   private busy = false
   private operation: 'analysis' | 'execute' | null = null
+  private activeTask: {file:string;priority:boolean;at:number}|null = null
   private generation = 0
   private counter = 0
   private snapshotChain = Promise.resolve()
@@ -32,7 +33,8 @@ export class AgentEngine {
     const root=this.state.settings.root, mode=this.state.settings.mode
     if (!root) return
     const status=this.state.status === 'followup' ? 'followup' : this.state.finding ? 'choosing' : 'watching'
-    const snapshot=JSON.stringify({version:1,root,mode,status,finding:this.state.finding,backlog:this.state.backlog,report:this.state.report,reportPath:this.state.reportPath,seen:[...this.seen],rounds:this.state.rounds,solved:this.state.solved})
+    const tasks=this.queue.snapshot(); if(this.activeTask&&!tasks.some(item=>item.file===this.activeTask!.file)) tasks.push(this.activeTask)
+    const snapshot=JSON.stringify({version:1,root,mode,status,finding:this.state.finding,backlog:this.state.backlog,report:this.state.report,reportPath:this.state.reportPath,seen:[...this.seen],rounds:this.state.rounds,solved:this.state.solved,tasks,focus:[...this.focus]})
     const file=this.snapshotFile(root,mode)
     this.snapshotChain=this.snapshotChain.then(async()=>{ await mkdir(this.reportsDir,{recursive:true}); const tmp=`${file}.${randomUUID()}.tmp`; await writeFile(tmp,snapshot,'utf8'); await rename(tmp,file) }).catch(error=>{console.error('任务保存失败',error)})
   }
@@ -45,6 +47,8 @@ export class AgentEngine {
       this.state.report=typeof saved.report==='string'?saved.report:''; this.state.reportPath=typeof saved.reportPath==='string'?saved.reportPath:''
       this.state.rounds=Number.isSafeInteger(saved.rounds)?saved.rounds:0; this.state.solved=Number.isSafeInteger(saved.solved)?saved.solved:0
       this.seen=new Set(saved.seen.filter((value:unknown)=>typeof value==='string'))
+      if(Array.isArray(saved.tasks)) this.queue.restore(saved.tasks.filter((item:any)=>item&&typeof item.file==='string'&&inside(root,item.file)&&!ignored(root,item.file)&&typeof item.priority==='boolean'&&Number.isFinite(item.at)))
+      if(Array.isArray(saved.focus)) this.focus=new Map(saved.focus.filter((item:any)=>Array.isArray(item)&&typeof item[0]==='string'&&inside(root,item[0])&&!ignored(root,item[0])&&typeof item[1]==='string'))
       this.state.status=this.state.finding ? saved.status==='followup' && this.state.report ? 'followup' : 'choosing' : 'watching'
     } catch(error) { if ((error as NodeJS.ErrnoException).code!=='ENOENT') this.log('无法恢复上次任务记录，请检查应用数据目录','error') }
   }
@@ -107,12 +111,13 @@ export class AgentEngine {
     }
     if (!this.running || epoch !== this.generation) return
     let initialized = false
-    const watcher = chokidar.watch(root, { ignoreInitial: false, persistent: true, followSymlinks: false, ignored: file => ignored(root, file), awaitWriteFinish: { stabilityThreshold: 800, pollInterval: 150 } })
+    const watcher = chokidar.watch(root, { ignoreInitial: false, persistent: true, followSymlinks: false, ignored: file => inside(this.reportsDir,file) || ignored(root, file), awaitWriteFinish: { stabilityThreshold: 800, pollInterval: 150 } })
     this.watcher = watcher
     const add = (file: string, changed = false) => {
       if (epoch !== this.generation || !this.running || !readable(root, file)) return
       if (this.files.size >= 2000 && !this.files.has(file)) return
-      this.files.add(file); this.queue.add(file, initialized)
+      this.files.add(file); if(initialized||!this.queue.has(file)) this.queue.add(file, initialized)
+      if(initialized) this.saveTasks()
       if (initialized) {
         this.log(`${changed ? '内容更新' : '发现新文件'} · ${path.relative(root,file)} · 已优先排队`, 'new')
         if (this.operation === 'analysis') { this.connected = false; this.controller?.abort() }
@@ -122,20 +127,23 @@ export class AgentEngine {
     watcher.on('addDir', file => {
       if (initialized && epoch === this.generation) {
         this.queue.add(file,true)
+        this.saveTasks()
         this.log(`发现新文件夹 · ${path.relative(root,file)} · 已优先检查新任务意图`, 'new')
         if (this.operation === 'analysis') { this.connected = false; this.controller?.abort() }
       }
     })
-    watcher.on('unlink', file => { this.files.delete(file); this.queue.remove(file); this.lastRead.delete(file); this.publish() })
+    watcher.on('unlink', file => { this.files.delete(file); this.queue.remove(file); this.lastRead.delete(file); this.saveTasks(); this.publish() })
     watcher.on('error', error => { if (epoch === this.generation) void this.stop('error', `无法监听目录：${String(error)}`) })
     watcher.on('ready', () => {
       if (epoch !== this.generation) return
       initialized = true; this.log(`已建立桌面索引 · ${this.files.size} 个可读文件${this.files.size >= 2000 ? '（达到 demo 的 2000 文件上限）' : ''}`)
+      this.saveTasks()
       this.timer = setInterval(() => void this.pump(), 1200); void this.pump()
     })
   }
   async stop(status: AgentState['status'] = 'stopped', reason = '') {
     if (this.running) this.saveTasks()
+    this.activeTask=null
     this.running = false; this.generation++; this.controller?.abort(); this.controller = null
     if (this.timer) clearInterval(this.timer)
     this.timer = null; this.connected = false; this.client.close()
@@ -171,6 +179,7 @@ export class AgentEngine {
     const task = this.queue.take()
     if (!task) return
     const epoch = this.generation
+    this.activeTask=task; this.saveTasks()
     this.busy = true; this.operation = 'analysis'; const controller = new AbortController(); this.controller = controller
     this.state.currentFile = path.relative(this.state.settings.root, task.file)
     if (!this.state.finding && this.state.status !== 'followup') this.state.status = 'thinking'
@@ -216,6 +225,7 @@ export class AgentEngine {
       else await this.stop(/usage.?limit|quota|rate.?limit.*(?:exceed|reach)/i.test(String(error)) ? 'quota' : 'error', String((error as Error).message))
     } finally {
       if (epoch === this.generation) {
+        this.activeTask=null; this.saveTasks()
         this.busy = false; this.operation = null; this.controller = null
         if (this.state.status === 'thinking' && !this.state.finding) this.state.status = 'watching'
         this.publish()

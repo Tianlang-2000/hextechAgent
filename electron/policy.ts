@@ -17,6 +17,9 @@ export class TaskQueue {
   add(file: string, priority = false) { const old = this.tasks.get(file); this.tasks.set(file, { file, priority: priority || !!old?.priority, at: Date.now() }) }
   remove(file: string) { this.tasks.delete(file) }
   clear() { this.tasks.clear() }
+  snapshot() { return [...this.tasks.values()].map(item=>({...item})) }
+  restore(items: {file:string;priority:boolean;at:number}[]) { for (const item of items) this.tasks.set(item.file,{...item}) }
+  has(file: string) { return this.tasks.has(file) }
   get size() { return this.tasks.size }
   get urgent() { return [...this.tasks.values()].some(item => item.priority) }
   take() {

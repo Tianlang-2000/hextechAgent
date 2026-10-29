@@ -97,7 +97,7 @@ onUnmounted(()=>{unsubscribe?.();unsubscribeConnection?.();unsubscribeModels?.()
 <template>
   <div :class="['app-shell',{floating:overlay}]">
     <header class="titlebar">
-      <div class="brand"><span class="brand-mark"><Hexagon :size="23"/><span>H</span></span><strong>HEXTECH <em>AGENT</em></strong><span class="version">0.3</span></div>
+      <div class="brand"><span class="brand-mark"><Hexagon :size="23"/><span>H</span></span><strong>HEXTECH <em>AGENT</em></strong><span class="version">0.4</span></div>
       <div class="title-center"><span class="tiny-dot"/> {{ state.settings.mode==='demo' ? '演示空间' : 'CODEX · 本机连接' }}</div>
       <div class="window-actions"><button v-if="overlay" title="收起卡牌，巡检继续" @click="action('hide-overlay')"><Minus :size="17"/></button><button v-else title="最小化" @click="action('minimize')"><Minus :size="17"/></button><button class="close-window" title="关闭并停止所有任务" @click="action('close')"><X :size="18"/></button></div>
     </header>

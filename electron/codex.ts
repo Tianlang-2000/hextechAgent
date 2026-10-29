@@ -69,7 +69,7 @@ export class CodexClient {
       this.child = null
       this.fail(new Error(`Codex 连接已退出。${diagnostic.slice(-600)}`))
     })
-    await this.request('initialize', { clientInfo: { name: 'hextech_agent', title: 'Hextech Agent', version: '0.3.0' } })
+    await this.request('initialize', { clientInfo: { name: 'hextech_agent', title: 'Hextech Agent', version: '0.4.0' } })
     this.send({ method: 'initialized', params: {} })
     const account = await this.request('account/read', {})
     if (!options.allowSignedOut && (!account.account || !['chatgpt', 'chatgptAuthTokens'].includes(account.account.type))) {

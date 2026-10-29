@@ -48,6 +48,21 @@ test('daily call budget persists and blocks calls after the limit',async()=>{
     await assert.rejects((restarted as any).reserveCall(),/上限/)
   } finally { assert.ok(inside(process.cwd(),base)&&base!==process.cwd()); await rm(base,{recursive:true,force:true}) }
 })
+test('pending finding and completed report survive a new engine instance',async()=>{
+  const base=await mkdtemp(path.join(process.cwd(),'test-workspace-'))
+  await writeFile(path.join(base,'one.ts'),'fetch()')
+  const settings={mode:'demo' as const,root:base,executable:'',model:'',rescanMinutes:0,allowWrite:false,floating:false}
+  const reports=path.join(base,'reports'); const first=new AgentEngine(settings,reports,()=>{})
+  let second:AgentEngine|undefined
+  try {
+    await first.start(); await waitFor(()=>first.state.status==='choosing')
+    const id=first.state.finding!.id
+    await first.choose(first.state.finding!.plans[0].id); const report=first.state.report
+    await first.stop()
+    second=new AgentEngine(settings,reports,()=>{}); await second.start()
+    assert.equal(second.state.status,'followup'); assert.equal(second.state.finding?.id,id); assert.equal(second.state.report,report)
+  } finally {await first.stop(); await second?.stop(); assert.ok(inside(process.cwd(),base)&&base!==process.cwd()); await rm(base,{recursive:true,force:true})}
+})
 test('real watcher runs the demo cycle, prioritizes new content and stops all work',async()=>{
   const base=await mkdtemp(path.join(process.cwd(),'test-workspace-'))
   const root=path.join(base,'files'); await mkdir(root); await writeFile(path.join(root,'initial.ts'),'fetch()')

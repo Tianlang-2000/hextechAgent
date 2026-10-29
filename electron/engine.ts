@@ -25,6 +25,28 @@ export class AgentEngine {
   private operation: 'analysis' | 'execute' | null = null
   private generation = 0
   private counter = 0
+  private snapshotChain = Promise.resolve()
+  private snapshotFile(root: string, mode: string) { return path.join(this.reportsDir, `tasks-${createHash('sha256').update(mode+'\0'+root).digest('hex')}.json`) }
+  private saveTasks() {
+    const root=this.state.settings.root, mode=this.state.settings.mode
+    if (!root) return
+    const status=this.state.status === 'followup' ? 'followup' : this.state.finding ? 'choosing' : 'watching'
+    const snapshot=JSON.stringify({version:1,root,mode,status,finding:this.state.finding,backlog:this.state.backlog,report:this.state.report,reportPath:this.state.reportPath,seen:[...this.seen],rounds:this.state.rounds,solved:this.state.solved})
+    const file=this.snapshotFile(root,mode)
+    this.snapshotChain=this.snapshotChain.then(async()=>{ await mkdir(this.reportsDir,{recursive:true}); const tmp=`${file}.${randomUUID()}.tmp`; await writeFile(tmp,snapshot,'utf8'); await rename(tmp,file) }).catch(error=>{console.error('任务保存失败',error)})
+  }
+  private async restoreTasks(root: string) {
+    await this.snapshotChain
+    try {
+      const saved=JSON.parse(await readFile(this.snapshotFile(root,this.state.settings.mode),'utf8'))
+      if(saved.version!==1 || saved.root!==root || saved.mode!==this.state.settings.mode || !Array.isArray(saved.backlog) || !Array.isArray(saved.seen)) throw new Error('invalid snapshot')
+      this.state.finding=saved.finding || null; this.state.backlog=saved.backlog
+      this.state.report=typeof saved.report==='string'?saved.report:''; this.state.reportPath=typeof saved.reportPath==='string'?saved.reportPath:''
+      this.state.rounds=Number.isSafeInteger(saved.rounds)?saved.rounds:0; this.state.solved=Number.isSafeInteger(saved.solved)?saved.solved:0
+      this.seen=new Set(saved.seen.filter((value:unknown)=>typeof value==='string'))
+      this.state.status=this.state.finding ? saved.status==='followup' && this.state.report ? 'followup' : 'choosing' : 'watching'
+    } catch(error) { if ((error as NodeJS.ErrnoException).code!=='ENOENT') this.log('无法恢复上次任务记录，请检查应用数据目录','error') }
+  }
   private async reserveCall() {
     const limit = this.state.settings.dailyLimit || 0
     const file = path.join(this.reportsDir, 'daily-usage.json')
@@ -75,6 +97,7 @@ export class AgentEngine {
     this.state.settings.root = root
     this.running = true; this.busy = false; this.files.clear(); this.queue.clear(); this.lastRead.clear(); this.seen.clear(); this.focus.clear()
     this.state.error = ''; this.state.status = 'watching'; this.state.finding = null; this.state.backlog = []; this.state.report = ''; this.state.reportPath = ''
+    await this.restoreTasks(root)
     this.state.account = this.state.settings.mode === 'demo' ? '演示模式 · 不消耗额度' : ''
     this.state.quotaRemaining = null
     this.log(this.state.settings.mode === 'demo' ? '演示巡检已启动 · 所有方案均为示例' : '正在连接本机 Codex…')
@@ -111,12 +134,13 @@ export class AgentEngine {
     })
   }
   async stop(status: AgentState['status'] = 'stopped', reason = '') {
+    if (this.running) this.saveTasks()
     this.running = false; this.generation++; this.controller?.abort(); this.controller = null
     if (this.timer) clearInterval(this.timer)
     this.timer = null; this.connected = false; this.client.close()
     const watcher = this.watcher; this.watcher = null
     this.state.status = status; this.state.error = reason; this.state.currentFile = ''
-    this.publish(); await watcher?.close()
+    this.publish(); await watcher?.close(); await this.snapshotChain
   }
   private async read(file: string) {
     if (ignored(this.state.settings.root, file)) return null
@@ -179,6 +203,7 @@ export class AgentEngine {
         if (this.state.finding || this.state.status === 'followup') {
           if (task.priority) this.state.backlog.unshift(finding); else this.state.backlog.push(finding)
         } else { this.state.finding = finding; this.state.status = 'choosing' }
+        this.saveTasks()
         this.log(`${task.priority ? '新动作优先 · ' : ''}${analysis.title} · 三个方案已就绪`, 'success')
       } else if (!this.state.finding && this.state.status !== 'followup') this.state.status = 'watching'
       if (this.state.settings.mode === 'codex') await this.client.limits().catch(() => {})
@@ -227,6 +252,7 @@ export class AgentEngine {
       await writeFile(reportPath, report, 'utf8')
       if (epoch !== this.generation) return
       this.state.report = report; this.state.reportPath = reportPath; this.state.solved++; this.state.status = 'followup'
+      this.saveTasks()
       this.log('本轮处理完成 · 请选择继续深入或继续巡检', 'success')
       if (this.state.settings.mode === 'codex') await this.client.limits().catch(() => {})
     } catch(error) { if (epoch === this.generation) await this.stop(/quota|usage.?limit|rate.?limit.*(?:exceed|reach)/i.test(String(error)) ? 'quota' : 'error', (error as Error).message) }
@@ -244,6 +270,6 @@ export class AgentEngine {
       for (const key of this.seen) if (key.startsWith(`${previous.source}:`)) this.seen.delete(key)
       this.log(`继续深入 · ${previous.source}`)
     } else this.log('继续巡检 · 新文件始终优先')
-    this.state.status = this.state.finding ? 'choosing' : 'watching'; this.publish(); void this.pump()
+    this.state.status = this.state.finding ? 'choosing' : 'watching'; this.saveTasks(); this.publish(); void this.pump()
   }
 }

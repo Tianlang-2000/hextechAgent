@@ -1,6 +1,6 @@
 export type Status = 'idle' | 'watching' | 'thinking' | 'choosing' | 'executing' | 'followup' | 'stopped' | 'quota' | 'error'
 export interface Plan { id: string; title: string; subtitle: string; description: string; steps: string[]; effort: string; risk: string }
-export interface Finding { id: string; title: string; summary: string; evidence: string[]; category: string; plans: Plan[]; source: string }
+export interface Finding { id: string; title: string; summary: string; evidence: string[]; evidenceLocations?: (number | null)[]; category: string; plans: Plan[]; source: string }
 export interface Analysis { hasIssue: boolean; title: string; summary: string; evidence: string[]; category: string; plans: Plan[] }
 export interface Settings { mode: 'demo' | 'codex'; root: string; executable: string; model: string; reasoningEffort?: string; serviceTier?: string; rescanMinutes?: number; dailyLimit?: number; allowWrite: boolean; floating: boolean; onboardingDone?: boolean }
 export interface ModelOption { model: string; name: string; description: string; isDefault: boolean; defaultEffort: string; efforts: { id: string; description: string }[]; tiers: { id: string; name: string; description: string }[] }

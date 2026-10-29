@@ -6,6 +6,11 @@ import { AgentEngine } from '../electron/engine'
 import { ignored, inside, readable, TaskQueue } from '../electron/policy'
 import { parseAnalysis } from '../electron/schema'
 import { demoAnalysis } from '../electron/demo'
+import { evidenceLocations } from '../electron/evidence'
+
+test('evidence only receives a line number for exact excerpts',()=>{
+  assert.deepEqual(evidenceLocations('first line\nfetch()\nlast line',['fetch()','invented','fi']),[2,null,null])
+})
 
 test('new actions outrank old tasks and duplicate changes coalesce', () => {
   const queue = new TaskQueue()

@@ -38,6 +38,16 @@ async function waitFor(predicate:()=>boolean,timeout=14000) {
   const deadline=Date.now()+timeout
   while(!predicate()) { if(Date.now()>deadline) throw new Error('Condition timed out'); await new Promise(resolve=>setTimeout(resolve,50)) }
 }
+test('daily call budget persists and blocks calls after the limit',async()=>{
+  const base=await mkdtemp(path.join(process.cwd(),'test-workspace-'))
+  const settings={mode:'codex' as const,root:base,executable:'',model:'',dailyLimit:1,allowWrite:false,floating:false}
+  try {
+    const first=new AgentEngine(settings,path.join(base,'reports'),()=>{})
+    await (first as any).reserveCall()
+    const restarted=new AgentEngine(settings,path.join(base,'reports'),()=>{})
+    await assert.rejects((restarted as any).reserveCall(),/上限/)
+  } finally { assert.ok(inside(process.cwd(),base)&&base!==process.cwd()); await rm(base,{recursive:true,force:true}) }
+})
 test('real watcher runs the demo cycle, prioritizes new content and stops all work',async()=>{
   const base=await mkdtemp(path.join(process.cwd(),'test-workspace-'))
   const root=path.join(base,'files'); await mkdir(root); await writeFile(path.join(root,'initial.ts'),'fetch()')

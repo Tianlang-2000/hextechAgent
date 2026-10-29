@@ -100,6 +100,7 @@ app.whenReady().then(async () => {
         for (const key of ['root','executable','model','reasoningEffort','serviceTier'] as const) if (typeof payload?.[key] === 'string') clean[key] = payload[key]
         for (const key of ['allowWrite','floating'] as const) if (typeof payload?.[key] === 'boolean') clean[key] = payload[key]
         if ([0,5,15,60].includes(payload?.rescanMinutes)) clean.rescanMinutes = payload.rescanMinutes
+        if (Number.isInteger(payload?.dailyLimit) && payload.dailyLimit >= 0 && payload.dailyLimit <= 1000) clean.dailyLimit = payload.dailyLimit
         if (typeof payload?.onboardingDone === 'boolean') clean.onboardingDone = payload.onboardingDone
         if (payload?.mode === 'demo' || payload?.mode === 'codex') {
           clean.mode = payload.mode

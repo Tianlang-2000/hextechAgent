@@ -17,6 +17,7 @@ const model = ref('')
 const effort = ref('')
 const tier = ref('')
 const rescanMinutes = ref(5)
+const dailyLimit = ref(0)
 const catalog = ref<ModelCatalog>({status:'idle',models:[],error:''})
 const activeModel = computed(()=>catalog.value.models.find(m=>m.model===model.value))
 const invalidPreferences = computed(()=>catalog.value.status==='ready' && (!!model.value&&!activeModel.value || !supportsEffort(activeModel.value,effort.value) || !supportsTier(activeModel.value,tier.value)))
@@ -47,7 +48,7 @@ async function action(name:string,payload?:unknown) {
 }
 async function toggleRun() { pending.value=true; try { await action(running.value ? 'stop':'start') } finally { pending.value=false } }
 async function selectRoot() { if (!window.hextech) return; const root=await window.hextech.chooseRoot(); if(root) await action('settings',{root}) }
-function preferences() { return {executable:executable.value,model:model.value,reasoningEffort:effort.value,serviceTier:tier.value,rescanMinutes:rescanMinutes.value} }
+function preferences() { return {executable:executable.value,model:model.value,reasoningEffort:effort.value,serviceTier:tier.value,rescanMinutes:rescanMinutes.value,dailyLimit:dailyLimit.value} }
 async function saveSettings() {
   if (invalidPreferences.value) { notify('请重新选择当前模型支持的推理强度和速度'); return }
   if (await action('settings',preferences())) settingsOpen.value=false
@@ -57,6 +58,7 @@ watch(settingsOpen,async open=>{
   executable.value=state.value.settings.executable; model.value=state.value.settings.model
   effort.value=state.value.settings.reasoningEffort||''; tier.value=state.value.settings.serviceTier||''
   rescanMinutes.value=state.value.settings.rescanMinutes??5
+  dailyLimit.value=state.value.settings.dailyLimit??0
   if(catalog.value.status==='idle'&&!running.value)await action('models-refresh')
 })
 async function selectMode(mode: 'demo' | 'codex') {
@@ -159,6 +161,7 @@ onUnmounted(()=>{unsubscribe?.();unsubscribeConnection?.();unsubscribeModels?.()
     <p class="setting-note">{{ state.settings.mode==='codex'?'真实分析会将所选目录的文件节选交给模型处理，并使用账号额度。':'演示不会调用模型；下面的选择将在真实分析时生效。' }}</p>
     <ModelPreferences v-model:model="model" v-model:effort="effort" v-model:tier="tier" :catalog="catalog" :disabled="running||connecting" @refresh="action('models-refresh')"/>
     <div class="model-preferences"><label for="rescan-frequency">未变化文件的复查频率</label><select id="rescan-frequency" v-model.number="rescanMinutes" :disabled="running||connecting"><option :value="0">仅检查新增或修改</option><option :value="5">每个文件至少间隔 5 分钟</option><option :value="15">每个文件至少间隔 15 分钟</option><option :value="60">每个文件至少间隔 1 小时</option></select><p class="preference-note">新文件和修改仍会优先检查。减少复查频率可降低调用次数。</p></div>
+    <div class="model-preferences"><label for="daily-limit">每日调用次数上限</label><select id="daily-limit" v-model.number="dailyLimit" :disabled="running||connecting"><option :value="0">不限制</option><option :value="10">10 次</option><option :value="30">30 次</option><option :value="100">100 次</option></select><p class="preference-note">按本机自然日计数，问题分析和选牌处理各算一次；失败或中断也可能消耗一次。此上限不是账号额度。</p></div>
     <details class="advanced-settings"><summary>高级选项 <span>通常无需修改</span></summary><label>连接组件路径 <span>留空使用内置组件</span></label><input v-model="executable" :disabled="running||connecting" placeholder="自动使用内置组件"/></details>
     <div class="setting-toggle"><div><strong>桌面悬浮卡牌</strong><small>方案就绪后，在桌面弹出独立窗口</small></div><button :disabled="running" :class="['toggle',{on:state.settings.floating}]" @click="action('settings',{floating:!state.settings.floating})"><i/></button></div><div class="setting-toggle"><div><strong>选牌后允许修改文件</strong><small>默认关闭；开启后，选牌才会触发文件修改</small></div><button :disabled="running" :class="['toggle',{on:state.settings.allowWrite}]" @click="action('settings',{allowWrite:!state.settings.allowWrite})"><i/></button></div>
     <p v-if="running" class="setting-note">先停止巡检，即可修改设置。</p><div class="modal-actions"><button class="secondary-button" @click="settingsOpen=false">关闭</button><button v-if="state.settings.mode==='codex'&&connection.status==='ready'" class="run-button" :disabled="running||connecting||invalidPreferences" @click="startConnected"><Play :size="15"/>开始真实巡检</button><button data-testid="settings-save" class="run-button" :disabled="running||connecting||invalidPreferences" @click="saveSettings"><Check :size="15"/>保存设置</button></div></section></div>

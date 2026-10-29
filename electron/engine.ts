@@ -15,6 +15,7 @@ export class AgentEngine {
   private files = new Set<string>()
   private seen = new Set<string>()
   private lastRead = new Map<string, number>()
+  private analyzed = new Map<string,string>()
   private focus = new Map<string, string>()
   private watcher: FSWatcher | null = null
   private timer: ReturnType<typeof setInterval> | null = null
@@ -34,7 +35,7 @@ export class AgentEngine {
     if (!root) return
     const status=this.state.status === 'followup' ? 'followup' : this.state.finding ? 'choosing' : 'watching'
     const tasks=this.queue.snapshot(); if(this.activeTask&&!tasks.some(item=>item.file===this.activeTask!.file)) tasks.push(this.activeTask)
-    const snapshot=JSON.stringify({version:1,root,mode,status,finding:this.state.finding,backlog:this.state.backlog,report:this.state.report,reportPath:this.state.reportPath,seen:[...this.seen],rounds:this.state.rounds,solved:this.state.solved,tasks,focus:[...this.focus]})
+    const snapshot=JSON.stringify({version:1,root,mode,status,finding:this.state.finding,backlog:this.state.backlog,report:this.state.report,reportPath:this.state.reportPath,seen:[...this.seen],rounds:this.state.rounds,solved:this.state.solved,tasks,focus:[...this.focus],analyzed:[...this.analyzed]})
     const file=this.snapshotFile(root,mode)
     this.snapshotChain=this.snapshotChain.then(async()=>{ await mkdir(this.reportsDir,{recursive:true}); const tmp=`${file}.${randomUUID()}.tmp`; await writeFile(tmp,snapshot,'utf8'); await rename(tmp,file) }).catch(error=>{console.error('任务保存失败',error)})
   }
@@ -49,6 +50,7 @@ export class AgentEngine {
       this.seen=new Set(saved.seen.filter((value:unknown)=>typeof value==='string'))
       if(Array.isArray(saved.tasks)) this.queue.restore(saved.tasks.filter((item:any)=>item&&typeof item.file==='string'&&inside(root,item.file)&&!ignored(root,item.file)&&typeof item.priority==='boolean'&&Number.isFinite(item.at)))
       if(Array.isArray(saved.focus)) this.focus=new Map(saved.focus.filter((item:any)=>Array.isArray(item)&&typeof item[0]==='string'&&inside(root,item[0])&&!ignored(root,item[0])&&typeof item[1]==='string'))
+      if(Array.isArray(saved.analyzed)) this.analyzed=new Map(saved.analyzed.filter((item:any)=>Array.isArray(item)&&typeof item[0]==='string'&&inside(root,item[0])&&!ignored(root,item[0])&&typeof item[1]==='string'&&/^[a-f0-9]{64}$/.test(item[1])))
       this.state.status=this.state.finding ? saved.status==='followup' && this.state.report ? 'followup' : 'choosing' : 'watching'
     } catch(error) { if ((error as NodeJS.ErrnoException).code!=='ENOENT') this.log('无法恢复上次任务记录，请检查应用数据目录','error') }
   }
@@ -100,7 +102,7 @@ export class AgentEngine {
     const root = await realpath(this.state.settings.root)
     if (!(await lstat(root)).isDirectory()) throw new Error('监听位置必须是文件夹')
     this.state.settings.root = root
-    this.running = true; this.busy = false; this.files.clear(); this.queue.clear(); this.lastRead.clear(); this.seen.clear(); this.focus.clear()
+    this.running = true; this.busy = false; this.files.clear(); this.queue.clear(); this.lastRead.clear(); this.seen.clear(); this.focus.clear(); this.analyzed.clear()
     this.state.error = ''; this.state.status = 'watching'; this.state.finding = null; this.state.backlog = []; this.state.report = ''; this.state.reportPath = ''
     await this.restoreTasks(root)
     this.state.account = this.state.settings.mode === 'demo' ? '演示模式 · 不消耗额度' : ''
@@ -132,7 +134,7 @@ export class AgentEngine {
         if (this.operation === 'analysis') { this.connected = false; this.controller?.abort() }
       }
     })
-    watcher.on('unlink', file => { this.files.delete(file); this.queue.remove(file); this.lastRead.delete(file); this.saveTasks(); this.publish() })
+    watcher.on('unlink', file => { this.files.delete(file); this.queue.remove(file); this.lastRead.delete(file); this.analyzed.delete(file); this.saveTasks(); this.publish() })
     watcher.on('error', error => { if (epoch === this.generation) void this.stop('error', `无法监听目录：${String(error)}`) })
     watcher.on('ready', () => {
       if (epoch !== this.generation) return
@@ -190,6 +192,9 @@ export class AgentEngine {
       if (content === null || epoch !== this.generation) return
       let analysis
       const focus = this.focus.get(task.file)
+      const fileInfo=await lstat(task.file)
+      const contentHash=createHash('sha256').update(content).digest('hex')
+      if(fileInfo.isFile() && !focus && this.analyzed.get(task.file)===contentHash) return
       if (this.state.settings.mode === 'demo') {
         await delay(1900, controller.signal); analysis = demoAnalysis(path.relative(this.state.settings.root,task.file), content)
         if (focus) { analysis.title = '深入复核：关联流程与边界情况'; analysis.summary = '沿着上一轮方案，进一步检查相邻流程、失败恢复和验证覆盖。这是演示判断。' }
@@ -203,6 +208,7 @@ export class AgentEngine {
         analysis = parseAnalysis(await this.client.run(this.state.settings.root, (focus || '') + '\n' + prompt, { model: this.state.settings.model, reasoningEffort: this.state.settings.reasoningEffort, serviceTier: this.state.settings.serviceTier, schema: analysisSchema, signal: controller.signal }))
       }
       if (epoch !== this.generation || controller.signal.aborted) return
+      if(fileInfo.isFile()) this.analyzed.set(task.file,contentHash)
       this.state.rounds++
       const key = `${path.relative(this.state.settings.root,task.file)}:${analysis.title}`
       const fingerprint = createHash('sha256').update(key + content + (focus || '')).digest('hex')

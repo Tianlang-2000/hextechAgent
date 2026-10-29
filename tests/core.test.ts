@@ -73,6 +73,23 @@ test('pending finding and completed report survive a new engine instance',async(
     assert.equal(second.state.status,'followup'); assert.equal(second.state.finding?.id,id); assert.equal(second.state.report,report)
   } finally {await first.stop(); await second?.stop(); assert.ok(inside(process.cwd(),base)&&base!==process.cwd()); await rm(base,{recursive:true,force:true})}
 })
+test('unchanged file is not analyzed again after restart, but changed content is',async()=>{
+  const base=await mkdtemp(path.join(process.cwd(),'test-workspace-')); const file=path.join(base,'one.ts')
+  await writeFile(file,'first version')
+  const settings={mode:'codex' as const,root:base,executable:'',model:'',rescanMinutes:0,allowWrite:false,floating:false}
+  let calls=0
+  const setup=()=>{
+    const engine=new AgentEngine(settings,path.join(base,'reports'),()=>{})
+    ;(engine as any).client={connect:async()=>({type:'chatgpt'}),limits:async()=>({}),close:()=>{},run:async()=>{calls++;return JSON.stringify({...demoAnalysis('one.ts','x'),hasIssue:false,plans:[]})}}
+    return engine
+  }
+  const first=setup(); let second:AgentEngine|undefined
+  try {
+    await first.start(); await waitFor(()=>calls===1); await waitFor(()=>first.state.rounds===1); await first.stop()
+    second=setup(); await second.start(); await new Promise(resolve=>setTimeout(resolve,1700)); assert.equal(calls,1)
+    await writeFile(file,'second version'); await waitFor(()=>calls===2)
+  } finally { await first.stop(); await second?.stop(); assert.ok(inside(process.cwd(),base)&&base!==process.cwd()); await rm(base,{recursive:true,force:true}) }
+})
 test('real watcher runs the demo cycle, prioritizes new content and stops all work',async()=>{
   const base=await mkdtemp(path.join(process.cwd(),'test-workspace-'))
   const root=path.join(base,'files'); await mkdir(root); await writeFile(path.join(root,'initial.ts'),'fetch()')

@@ -125,8 +125,9 @@ export class AgentEngine {
   private async pump() {
     if (!this.running || this.busy) return
     if (!this.queue.urgent && (this.state.status === 'followup' || this.state.backlog.length >= 8)) return
-    if (!this.queue.size) {
-      const next = [...this.files].filter(file => Date.now() - (this.lastRead.get(file) || 0) > 45000).sort((a,b) => (this.lastRead.get(a)||0) - (this.lastRead.get(b)||0))[0]
+    if (!this.queue.size && this.state.settings.rescanMinutes !== 0) {
+      const interval = (this.state.settings.rescanMinutes ?? 5) * 60000
+      const next = [...this.files].filter(file => Date.now() - (this.lastRead.get(file) || 0) > interval).sort((a,b) => (this.lastRead.get(a)||0) - (this.lastRead.get(b)||0))[0]
       if (next) this.queue.add(next)
     }
     const task = this.queue.take()

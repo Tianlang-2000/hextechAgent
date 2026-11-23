@@ -80,6 +80,11 @@ app.whenReady().then(async () => {
   ipcMain.handle('hextech:models',()=>connection.catalog)
   ipcMain.handle('hextech:connection', () => connection.state)
   ipcMain.handle('hextech:state', () => engine.state)
+  ipcMain.handle('hextech:report', (_event,id:unknown) => {
+    if (typeof id !== 'string') throw new Error('无效报告')
+    return engine.readReport(id)
+  })
+  await engine.refreshReports()
   ipcMain.handle('hextech:root', async () => {
     const result = await dialog.showOpenDialog(main!, { title: '选择要持续巡检的目录', properties: ['openDirectory'] })
     return result.canceled ? null : result.filePaths[0]
@@ -95,6 +100,7 @@ app.whenReady().then(async () => {
       case 'choose': if (typeof payload !== 'string') throw new Error('无效方案'); await engine.choose(payload); break
       case 'next': await engine.next(false); break
       case 'deeper': await engine.next(true); break
+      case 'reports-refresh': await engine.refreshReports(); break
       case 'settings': {
         const clean: Partial<Settings> = {}
         for (const key of ['root','executable','model','reasoningEffort','serviceTier'] as const) if (typeof payload?.[key] === 'string') clean[key] = payload[key]
@@ -108,11 +114,16 @@ app.whenReady().then(async () => {
         }
         const changedExecutable=clean.executable!==undefined&&clean.executable!==engine.state.settings.executable
         await engine.configure(clean)
+        await engine.refreshReports()
         if(changedExecutable)connection.invalidate()
         await writeFile(path.join(userDir,'settings.json'),JSON.stringify(engine.state.settings,null,2),'utf8')
         break
       }
-      case 'report': if (engine.state.reportPath) await shell.openPath(engine.state.reportPath); break
+      case 'report': {
+        const file = typeof payload === 'string' ? engine.reportFile(payload) : engine.state.reportPath
+        if (file) { const error = await shell.openPath(file); if(error) throw new Error(error) }
+        break
+      }
       case 'folder': await shell.openPath(engine.state.settings.root); break
       case 'minimize': main?.minimize(); break
       case 'hide-overlay': overlay?.hide(); break
@@ -148,8 +159,11 @@ app.whenReady().then(async () => {
       await wait(()=>engine.state.status==='followup')
       const reportWritten = !!engine.state.reportPath
       if (!reportWritten) throw new Error('Chosen plan did not generate a report')
-      await new Promise(resolve=>setTimeout(resolve,400))
-      if (!await main.webContents.executeJavaScript('document.querySelectorAll(".followup-card").length === 2')) throw new Error('Two-card followup layout failed')
+      const followupDeadline=Date.now()+10000
+      while (!await main.webContents.executeJavaScript('document.querySelectorAll(".followup-card").length === 2')) {
+        if (Date.now()>followupDeadline) throw new Error('Two-card followup layout failed')
+        await new Promise(resolve=>setTimeout(resolve,100))
+      }
       await writeFile(path.join(outputDir,'followup.png'),(await main.webContents.capturePage()).toPNG())
       await writeFile(path.join(demoRoot,'new-task.md'),'# 新任务\nTODO: 确定下周交付负责人。')
       await wait(()=>engine.state.logs.some(log=>log.text.includes('new-task.md')) && engine.state.backlog.some(item=>item.source==='new-task.md'))

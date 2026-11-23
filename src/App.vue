@@ -6,9 +6,21 @@ import ModelPreferences from './components/ModelPreferences.vue'
 import { effortLabel, speedLabel, supportsEffort, supportsTier } from './generation-options'
 const overlay = location.hash === '#overlay'
 document.documentElement.classList.toggle('is-overlay',overlay)
-const state = ref<AgentState>({ status:'idle', settings:{ mode:'demo',root:'',executable:'',model:'',allowWrite:false,floating:true },account:'',quotaRemaining:null,files:0,rounds:0,solved:0,queued:0,currentFile:'',finding:null,backlog:[],report:'',reportPath:'',logs:[],error:'' })
+const state = ref<AgentState>({ status:'idle', settings:{ mode:'demo',root:'',executable:'',model:'',allowWrite:false,floating:true },account:'',quotaRemaining:null,files:0,rounds:0,solved:0,queued:0,currentFile:'',finding:null,backlog:[],report:'',reportPath:'',logs:[],error:'',reports:[] })
 const settingsOpen = ref(false)
 const reportOpen = ref(false)
+const historicalReport = ref('')
+const historicalId = ref('')
+const reportLoading = ref(false)
+const reportText = computed(()=>historicalId.value ? historicalReport.value : state.value.report)
+async function openReport(id = '') {
+  historicalId.value=id; historicalReport.value=''; reportOpen.value=true
+  if (!id || !window.hextech) return
+  reportLoading.value=true
+  try { const text=await window.hextech.getReport(id); if(historicalId.value===id) historicalReport.value=text }
+  catch(error) { notify((error as Error).message); reportOpen.value=false }
+  finally { reportLoading.value=false }
+}
 const toast = ref('')
 const tab = ref('overview')
 const pending = ref(false)
@@ -107,6 +119,7 @@ onUnmounted(()=>{unsubscribe?.();unsubscribeConnection?.();unsubscribeModels?.()
         <div class="workspace-label">WORKSPACE</div>
         <button :class="['nav-item',{active:tab==='overview'}]" @click="tab='overview'"><Hexagon :size="18"/> 海克斯空间 <span class="nav-dot"/></button>
         <button :class="['nav-item',{active:tab==='activity'}]" @click="tab='activity'"><Activity :size="18"/> 活动记录 <small>{{ state.logs.length }}</small></button>
+        <button :class="['nav-item',{active:tab==='reports'}]" @click="tab='reports'"><FileText :size="18"/> 报告历史 <small>{{ state.reports.length }}</small></button>
         <button class="nav-item" @click="settingsOpen=true"><Settings2 :size="18"/> 连接与设置</button>
         <div class="side-line"/>
         <div class="workspace-label">WATCHING</div>
@@ -117,7 +130,7 @@ onUnmounted(()=>{unsubscribe?.();unsubscribeConnection?.();unsubscribeModels?.()
 
       <main>
         <template v-if="!overlay">
-          <div class="page-heading"><div><div class="eyebrow">YOUR AMBIENT COPILOT</div><h1>{{ tab==='activity'?'每一步，都有迹可循':'把下一步，交给海克斯。' }}</h1><p>安静地发现问题，在需要你的时候，给出选择。</p></div><button data-testid="settings-open" class="icon-button" title="连接与设置" @click="settingsOpen=true"><Settings2 :size="19"/></button></div>
+          <div class="page-heading"><div><div class="eyebrow">YOUR AMBIENT COPILOT</div><h1>{{ tab==='reports'?'做过的工作，随时回看':tab==='activity'?'每一步，都有迹可循':'把下一步，交给海克斯。' }}</h1><p>安静地发现问题，在需要你的时候，给出选择。</p></div><button data-testid="settings-open" class="icon-button" title="连接与设置" @click="settingsOpen=true"><Settings2 :size="19"/></button></div>
           <section class="monitor-panel">
             <div class="monitor-left"><div :class="['radar-orb',{spinning:running}]"><Radar :size="28"/><i/><i/></div><div><div class="monitor-title"><span :class="['live-dot',{off:!running}]"/>{{ statusText }}<span class="mode-chip">{{ state.settings.mode==='demo'?'演示模式':'CODEX' }}</span></div><p :title="statusDetail">{{ statusDetail }}</p></div></div>
             <div class="monitor-right"><span class="quota"><Zap :size="14"/>{{ quotaText }}</span><button :class="['run-button',{running}]" :disabled="pending" @click="toggleRun"><LoaderCircle v-if="pending" class="spin" :size="15"/><Pause v-else-if="running" :size="15"/><Play v-else :size="15"/>{{ running?'停止巡检':'开始巡检' }}</button></div>
@@ -142,7 +155,7 @@ onUnmounted(()=>{unsubscribe?.();unsubscribeConnection?.();unsubscribeModels?.()
               </button>
             </div>
             <div v-else class="followup-cards"><button class="followup-card" @click="action('deeper')"><span class="followup-icon"><Layers3 :size="26"/></span><h3>再深入一步</h3><p>沿着这条线索，检查根因与相邻问题。</p><span>继续深入 <ArrowRight :size="16"/></span></button><button class="followup-card cyan" @click="action('next')"><span class="followup-icon"><Radar :size="26"/></span><h3>寻找下一个机会</h3><p>回到桌面巡检，优先留意新的工作。</p><span>继续巡检 <ArrowRight :size="16"/></span></button></div>
-            <div class="below-cards"><span v-if="state.status==='executing'"><LoaderCircle class="spin" :size="14"/> Codex 正在处理你选择的方案</span><button v-else-if="isFollowup" @click="reportOpen=true"><FileText :size="14"/>查看执行报告 <ChevronRight :size="13"/></button><span v-else><ShieldCheck :size="13"/>{{ state.settings.allowWrite?'选择后允许 Codex 修改目录内文件':'选牌后生成详细报告，源文件保持只读' }}</span><button v-if="canChoose" @click="action('next')">暂时跳过 <ArrowRight :size="13"/></button></div>
+            <div class="below-cards"><span v-if="state.status==='executing'"><LoaderCircle class="spin" :size="14"/> Codex 正在处理你选择的方案</span><button v-else-if="isFollowup" @click="openReport()"><FileText :size="14"/>查看执行报告 <ChevronRight :size="13"/></button><span v-else><ShieldCheck :size="13"/>{{ state.settings.allowWrite?'选择后允许 Codex 修改目录内文件':'选牌后生成详细报告，源文件保持只读' }}</span><button v-if="canChoose" @click="action('next')">暂时跳过 <ArrowRight :size="13"/></button></div>
           </template>
 
           <div v-else class="empty-discovery"><div class="empty-hex"><Hexagon :size="80" :stroke-width="0.7"/><Sparkles :size="29"/></div><h2>{{ state.status==='thinking'?'好方案，值得等一小会儿。':state.status==='quota'?'休息一下，等灵感恢复。':'下一张好牌，正在路上。' }}</h2><p>{{ running?'海克斯正在阅读文件，发现有依据的问题后，会带着三个方案来找你。':'点击「开始巡检」，体验发现问题、选择方案、继续探索的完整循环。' }}</p><span class="empty-tag"><span class="tiny-dot"/>{{ running?'先完成分析，再展示卡牌':'支持代码 · 文档 · 工作计划' }}</span></div>
@@ -151,6 +164,15 @@ onUnmounted(()=>{unsubscribe?.();unsubscribeConnection?.();unsubscribeModels?.()
         </section>
 
         <section v-if="!overlay" class="activity-section"><div class="section-heading"><div><Activity :size="16"/><span>最近动态</span></div><span class="section-hint">{{ state.files }} 个文件 · {{ state.rounds }} 次分析 · {{ state.solved }} 份报告</span></div><div class="activity-list"><div v-for="log in state.logs.slice(0,tab==='activity'?40:3)" :key="log.id" class="activity-row"><span :class="['log-dot',log.kind]"/><time>{{ log.time }}</time><span>{{ log.text }}</span><span v-if="log.kind==='new'" class="priority-tag">优先</span></div><div v-if="!state.logs.length" class="activity-row muted"><span class="log-dot"/><span>一切就绪。开始后，桌面的新动作会出现在这里。</span></div></div></section>
+        <section v-if="!overlay && tab==='reports'" class="report-history">
+          <div class="section-heading"><div><FileText :size="16"/><span>报告历史 · 当前目录</span></div><button @click="action('reports-refresh')">刷新</button></div>
+          <p class="setting-note">保留最近 100 份报告，演示与真实分析分别展示。报告记录当时的结果，文件可能已变化。</p>
+          <button v-for="entry in state.reports" :key="entry.id" class="history-row" @click="openReport(entry.id)">
+            <FileText :size="20"/><div><strong>{{ entry.title }}</strong><span>{{ entry.source }}</span></div>
+            <small>{{ entry.mode==='demo'?'演示报告':entry.write?'允许修改':'只读报告' }} · {{ new Date(entry.createdAt).toLocaleString('zh-CN',{hour12:false}) }}</small><ChevronRight :size="16"/>
+          </button>
+          <p v-if="!state.reports.length" class="history-empty">还没有报告。选择一个方案并完成处理后，报告会保存在这里。</p>
+        </section>
         <footer v-if="!overlay"><span><span class="tiny-dot"/>{{ state.settings.mode==='demo'?'演示不调用模型':'复用本机 Codex 登录' }}</span><span>发现 → 三选一 → 处理 → 二选一 → 继续</span><button @click="settingsOpen=true">连接说明 <CircleHelp :size="12"/></button></footer>
       </main>
     </div>
@@ -165,7 +187,7 @@ onUnmounted(()=>{unsubscribe?.();unsubscribeConnection?.();unsubscribeModels?.()
     <details class="advanced-settings"><summary>高级选项 <span>通常无需修改</span></summary><label>连接组件路径 <span>留空使用内置组件</span></label><input v-model="executable" :disabled="running||connecting" placeholder="自动使用内置组件"/></details>
     <div class="setting-toggle"><div><strong>桌面悬浮卡牌</strong><small>方案就绪后，在桌面弹出独立窗口</small></div><button :disabled="running" :class="['toggle',{on:state.settings.floating}]" @click="action('settings',{floating:!state.settings.floating})"><i/></button></div><div class="setting-toggle"><div><strong>选牌后允许修改文件</strong><small>默认关闭；开启后，选牌才会触发文件修改</small></div><button :disabled="running" :class="['toggle',{on:state.settings.allowWrite}]" @click="action('settings',{allowWrite:!state.settings.allowWrite})"><i/></button></div>
     <p v-if="running" class="setting-note">先停止巡检，即可修改设置。</p><div class="modal-actions"><button class="secondary-button" @click="settingsOpen=false">关闭</button><button v-if="state.settings.mode==='codex'&&connection.status==='ready'" class="run-button" :disabled="running||connecting||invalidPreferences" @click="startConnected"><Play :size="15"/>开始真实巡检</button><button data-testid="settings-save" class="run-button" :disabled="running||connecting||invalidPreferences" @click="saveSettings"><Check :size="15"/>保存设置</button></div></section></div>
-    <div v-if="reportOpen" class="modal-backdrop" @click.self="reportOpen=false"><section class="modal report-modal"><div class="modal-heading"><h2>执行报告</h2><button class="icon-button" @click="reportOpen=false"><X :size="19"/></button></div><pre>{{ state.report }}</pre><div class="modal-actions"><button class="run-button" @click="action('report')"><ArrowDownToLine :size="16"/>打开报告文件</button></div></section></div>
+    <div v-if="reportOpen" class="modal-backdrop" @click.self="reportOpen=false"><section class="modal report-modal"><div class="modal-heading"><h2>执行报告</h2><button class="icon-button" @click="reportOpen=false"><X :size="19"/></button></div><pre>{{ reportLoading ? '正在读取报告…' : reportText }}</pre><div class="modal-actions"><button class="run-button" @click="action('report',historicalId || undefined)"><ArrowDownToLine :size="16"/>打开报告文件</button></div></section></div>
     <div v-if="toast" class="toast"><CircleHelp :size="16"/>{{ toast }}</div>
   </div>
 </template>

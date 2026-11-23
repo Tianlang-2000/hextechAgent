@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { AgentEngine } from '../electron/engine'
 import { ignored, inside, readable, TaskQueue } from '../electron/policy'
@@ -68,9 +68,64 @@ test('pending finding and completed report survive a new engine instance',async(
     await first.start(); await waitFor(()=>first.state.status==='choosing')
     const id=first.state.finding!.id
     await first.choose(first.state.finding!.plans[0].id); const report=first.state.report
+    assert.equal(first.state.reports.length,1)
     await first.stop()
     second=new AgentEngine(settings,reports,()=>{}); await second.start()
     assert.equal(second.state.status,'followup'); assert.equal(second.state.finding?.id,id); assert.equal(second.state.report,report)
+    assert.equal(await second.readReport(second.state.reports[0].id),report)
+  } finally {await first.stop(); await second?.stop(); assert.ok(inside(process.cwd(),base)&&base!==process.cwd()); await rm(base,{recursive:true,force:true})}
+})
+
+test('changed or deleted source cannot execute an old plan',async()=>{
+  for (const scenario of ['changed','deleted','changed-tail']) {
+    const remove=scenario==='deleted'
+    const base=await mkdtemp(path.join(process.cwd(),'test-workspace-'))
+    const initial=scenario==='changed-tail'?'fetch()\n'+'a'.repeat(17000):'fetch()'
+    const file=path.join(base,'one.ts'); await writeFile(file,initial)
+    const engine=new AgentEngine({mode:'demo',root:base,executable:'',model:'',rescanMinutes:0,allowWrite:false,floating:false},path.join(base,'reports'),()=>{})
+    try {
+      await engine.start(); await waitFor(()=>engine.state.status==='choosing')
+      const plan=engine.state.finding!.plans[0].id
+      if(remove) await rm(file); else await writeFile(file,initial+'\n// changed')
+      await engine.choose(plan)
+      assert.equal(engine.state.solved,0); assert.equal(engine.state.report,'')
+      assert.equal(engine.state.reports.length,0)
+      assert.ok(engine.state.logs.some(log=>/旧方案/.test(log.text)))
+      if(scenario==='changed') { await waitFor(()=>engine.state.status==='choosing'); assert.ok(engine.state.finding?.contentHash) }
+    } finally {await engine.stop(); assert.ok(inside(process.cwd(),base)&&base!==process.cwd()); await rm(base,{recursive:true,force:true})}
+  }
+})
+
+test('stop during asynchronous startup cannot revive a watcher',async()=>{
+  const base=await mkdtemp(path.join(process.cwd(),'test-workspace-'))
+  const engine=new AgentEngine({mode:'demo',root:base,executable:'',model:'',allowWrite:false,floating:false},path.join(base,'reports'),()=>{})
+  try {
+    const start=engine.start()
+    await engine.stop()
+    await start
+    await writeFile(path.join(base,'late.ts'),'fetch()')
+    await new Promise(resolve=>setTimeout(resolve,1500))
+    assert.equal(engine.state.status,'stopped'); assert.equal(engine.state.rounds,0)
+    assert.equal((engine as any).watcher,null)
+  } finally {await engine.stop(); assert.ok(inside(process.cwd(),base)&&base!==process.cwd()); await rm(base,{recursive:true,force:true})}
+})
+
+test('malformed saved finding is discarded before it reaches the renderer',async()=>{
+  const base=await mkdtemp(path.join(process.cwd(),'test-workspace-'))
+  await writeFile(path.join(base,'one.ts'),'fetch()')
+  const settings={mode:'demo' as const,root:base,executable:'',model:'',rescanMinutes:0,allowWrite:false,floating:false}
+  const reports=path.join(base,'reports'); const first=new AgentEngine(settings,reports,()=>{})
+  let second:AgentEngine|undefined
+  try {
+    await first.start(); await waitFor(()=>first.state.status==='choosing'); await first.stop()
+    const file=path.join(reports,(await readdir(reports)).find(name=>name.startsWith('tasks-'))!)
+    const saved=JSON.parse(await readFile(file,'utf8')); saved.finding.plans=[null]
+    await writeFile(file,JSON.stringify(saved))
+    second=new AgentEngine(settings,reports,()=>{}); await second.start()
+    assert.equal(second.state.finding,null)
+    assert.ok(second.state.logs.some(log=>log.kind==='error'))
+    await waitFor(()=>second!.state.status==='choosing')
+    assert.equal(second.state.finding!.plans.length,3)
   } finally {await first.stop(); await second?.stop(); assert.ok(inside(process.cwd(),base)&&base!==process.cwd()); await rm(base,{recursive:true,force:true})}
 })
 test('unchanged file is not analyzed again after restart, but changed content is',async()=>{

@@ -78,7 +78,7 @@ Get-FileHash -LiteralPath 'release/Hextech-Agent-Setup-0.4.0-x64.exe' -Algorithm
 - 仓库保存源码、中文文档、文档截图和依赖锁文件。
 - 编译产物、依赖目录、缓存、测试数据和本机报告不提交到源码分支。
 - Windows 安装包通过 GitHub Release 附件提供，并同时提供 SHA256 校验值。
-- 当前为 `0.4.0` 安装版预发布，发布说明需要区分已实现能力和后续计划。
+- 当前公开的 Windows 安装包为 [v0.3.0 预发布版](https://github.com/Tianlang-2000/hextechAgent/releases/tag/v0.3.0)。`main` 分支的源码版本为 `0.4.0`，尚未发布对应安装包。发布说明需区分已实现能力和后续计划。
 - 默认 CI 只运行不消耗模型额度的测试与构建。
 
 ## Electron 下载失败

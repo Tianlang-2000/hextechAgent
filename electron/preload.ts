@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AgentState, ConnectionState, HextechAPI, ModelCatalog } from '../src/shared'
 const api: HextechAPI = {
+  getReport: id => ipcRenderer.invoke('hextech:report',id),
   getModels: () => ipcRenderer.invoke('hextech:models'),
   onModels: callback => {
     const listener = (_event:unknown,catalog:ModelCatalog) => callback(catalog)

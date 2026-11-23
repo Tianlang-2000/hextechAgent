@@ -58,6 +58,7 @@ export class CodexClient {
     const child = spawn(executable || await findCodex(), ['app-server', '--listen', 'stdio://'], { stdio: 'pipe', windowsHide: true })
     this.child = child
     createInterface({ input: child.stdout }).on('line', line => {
+      if (this.child !== child) return
       try { this.receive(JSON.parse(line)) } catch { /* Non-JSON diagnostics never become model results. */ }
     })
     let diagnostic = ''
